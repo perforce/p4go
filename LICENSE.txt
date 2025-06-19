@@ -96,8 +96,9 @@ gopkg.in/Yaml.v3-v3.0.1
     Reference:   https://index.whitesourcesoftware.com/gri/app/reader/resource/content/asString/fb7c58a8-4102-4b37-bf9f-60699bb86bde
     Author:      Canonical Ltd
 
+---
 
-  Appendix:
+## Appendix : Third-Party Software and Licenses
 ---
 ISC
 ---
