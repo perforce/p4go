@@ -1,4 +1,4 @@
-module p4
+module github.com/perforce/p4go
 
 go 1.24
 
