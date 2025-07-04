@@ -33,11 +33,11 @@ Important Product Rebrand Notice
 
 Building P4Go from Source
 
-    The official version of P4Go exists as source on:
-    https://github.com/perforce/p4go
+    The official source for P4Go is available at:
+      https://github.com/perforce/p4go
 
-    Instructions for building are in the BUILD.md file which can be found
-    here - https://github.com/perforce/p4go/blob/master/build.md
+    Instructions for building P4Go can be found in the README.md file:
+      https://github.com/perforce/p4go/blob/main/README.md
 
 --------------------------------------------------------------------------
 
@@ -108,6 +108,20 @@ Compatibility Statements
       script APIs (P4Perl, P4Ruby, P4Go etc.) should ensure that a
       separate connection is used for each thread or that only one
       thread may use a shared connection at a time.
+
+--------------------------------------------------------------------------
+
+Bugs fixed in 2025.1 Patch 1
+
+    #2782990 (Job #127201)
+        Corrected the module name from p4 to github.com/perforce/p4go in go.mod 
+        to enable fetching the P4Go module from GitHub.
+    
+    #2781326 (Job #127204)
+        The documentation URL in the README.md file has been corrected.
+
+    #2781251 (Job #127205)
+        Removed the empty layer from the P4Go.tgz source directory.
 
 --------------------------------------------------------------------------
 
