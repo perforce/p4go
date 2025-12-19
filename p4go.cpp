@@ -38,12 +38,13 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "p4goclientapi.h"
 #include "p4go.h"
 #include "p4gocallback.h"
+#include "p4gospecdata.h"
 
 const char*
 P4Identify( P4GoClientApi* api )
 {
     StrBuf s( "P4GoClientApi " );
-    s << "2025.1"; // ToDo: Drive this off the cgo args?
+    s << "2025.2"; // ToDo: Drive this off the cgo args?
     s << " P4API " << api->GetBuild();
     char* ret = (char*)malloc( s.Length() + 1 );
     strcpy( ret, s.Text() );
@@ -141,6 +142,15 @@ ResultGetError( P4GoResult* ret )
     return 0;
 }
 
+P4GoSpecData*
+ResultGetSpec( P4GoResult* ret )
+{
+    if( ret->type == SPEC ) {
+        return ret->spec;
+    }
+    return 0;
+}
+
 int
 ResultGetKeyPair( P4GoResult* ret, int index, char** var, char** val )
 {
@@ -153,7 +163,7 @@ ResultGetKeyPair( P4GoResult* ret, int index, char** var, char** val )
         }
     } else if( ret->type == SPEC ) {
         StrRef svar, sval;
-        if( ret->spec->Dict()->GetVar( index, svar, sval ) ) {
+        if( ret->spec->GetDict()->GetVar( index, svar, sval ) ) {
             *var = svar.Text();
             *val = sval.Text();
             return 1;
@@ -704,7 +714,7 @@ int
 SpecDataGetKeyPair( P4GoSpecData* spec, int index, char** var, char** val )
 {
     StrRef svar, sval;
-    if( spec->Dict()->GetVar( index, svar, sval ) ) {
+    if( spec->GetDict()->GetVar( index, svar, sval ) ) {
         *var = svar.Text();
         *val = sval.Text();
         return 1;
@@ -957,4 +967,90 @@ int
 MergeDataGetMergeHint( P4GoMergeData* m )
 {
     return m->GetMergeHint();
+}
+
+int SpecDataGetVar(P4GoSpecData* sd, const char* key, char** value)
+{
+    if( !sd ) return 0;
+    
+    StrDict* dict = sd->GetDict();
+    StrPtr* val = dict->GetVar( key );
+    
+    if( !val ) return 0;
+    
+    *value = strdup( val->Text() );
+    return 1;
+}
+
+int SpecDataGetVarCount(P4GoSpecData* sd)
+{
+    if( !sd ) return 0;
+    
+    StrDict* dict = sd->GetDict();
+    return dict->GetCount();
+}
+
+int SpecDataGetKey(P4GoSpecData* sd, int index, char** key)
+{
+    if( !sd ) return 0;
+    
+    StrDict* dict = sd->GetDict();
+    StrRef var, val;
+    
+    if( !dict->GetVar( index, var, val ) ) return 0;
+    
+    *key = strdup( var.Text() );
+    return 1;
+}
+
+int SpecDataIsArray(P4GoSpecData* sd, const char* key)
+{
+    if( !sd ) return 0;
+    
+    // Check if there's a key with "[0]" suffix
+    StrBuf arrayKey;
+    arrayKey << key << "[0]";
+    
+    StrDict* dict = sd->GetDict();
+    StrPtr* val = dict->GetVar( arrayKey );
+    
+    return val != NULL ? 1 : 0;
+}
+
+int SpecDataGetArraySize(P4GoSpecData* sd, const char* key)
+{
+    if( !sd ) return 0;
+    
+    StrDict* dict = sd->GetDict();
+    int count = 0;
+    
+    // Count array elements
+    while( true )
+    {
+        StrBuf arrayKey;
+        arrayKey << key << "[" << count << "]";
+        
+        StrPtr* val = dict->GetVar( arrayKey );
+        if( !val ) break;
+        
+        count++;
+    }
+    
+    return count;
+}
+
+int SpecDataGetArrayValue(P4GoSpecData* sd, const char* key, int index, char** value)
+{
+    if( !sd ) return 0;
+    
+    StrBuf arrayKey;
+    arrayKey << key << "[" << index << "]";
+    
+    StrDict* dict = sd->GetDict();
+    StrPtr* val = dict->GetVar( arrayKey );
+    
+    if( !val ) return 0;
+    
+    *value = strdup( val->Text() );
+    return 1;
 }

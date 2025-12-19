@@ -1,7 +1,7 @@
                            Release Notes for
                        P4Go, P4 API for Golang
 
-                            Version 2025.1
+                            Version 2025.2
 
 Introduction
 
@@ -16,7 +16,7 @@ Introduction
     release up to the bug fix change level.
 
     The application versions of P4Go and P4 C/C++ API must align.
-    For example, P4Go 2025.1 requires 2025.1 P4 C/C++ API.
+    For example, P4Go 2025.2 requires 2025.2 P4 C/C++ API.
 
 --------------------------------------------------------------------------
 
@@ -45,13 +45,13 @@ Compatibility Statements
 
     Server Compatibility
 
-      This release of P4Go supports the 2025.1 P4 Server.
+      This release of P4Go supports the 2025.2 P4 Server.
       Older releases might work but are not supported.
 
     API Compatibility
 
-      This release of P4Go supports the 2025.1 P4 C/C++ API
-      (2025.1/2761706). Older releases might work but are not supported.
+      This release of P4Go supports the 2025.2 P4 C/C++ API
+      (2025.2/2852709). Older releases might work but are not supported.
 
     Golang Compatibility
 
@@ -76,10 +76,10 @@ Compatibility Statements
             Server 2022
         Linux kernel 2.6+ for Intel(x86_64)
             Ubuntu 22.04, 24.04
-            RockyLinux 9
+            RockyLinux 9, 10
         Linux kernel 2.6+ for ARM(aarch64)
             Ubuntu 22.04, 24.04
-            RockyLinux 9
+            RockyLinux 9, 10
         MACOS ARM64
             12+
         MACOS x86_64
@@ -108,6 +108,26 @@ Compatibility Statements
       script APIs (P4Perl, P4Ruby, P4Go etc.) should ensure that a
       separate connection is used for each thread or that only one
       thread may use a shared connection at a time.
+
+--------------------------------------------------------------------------
+
+New functionalities in 2025.2 (2025.2/2872356) (2025/12/18)
+
+    #2842998 (Job #128789)
+        This release of P4Go supports P4 C/C++ API 2025.2 (2025.2/2852709)
+
+    #2837048 (Job #128776)
+        Added support for Rocky Linux 10.
+
+    #2867669 (Job #130054)
+        Added support for three additional MinGW-w64 GCC 8 toolchain variants 
+        on Windows: win32-sjlj, posix-seh, and posix-sjlj.
+
+Bugs fixed in 2025.2 (2025.2/2872356) (2025/12/18)
+
+    #2866492 (Job #129174)
+        Added P4GoSpecData to provide proper Go slice ([]string) support for
+        spec list fields, replacing the old numbered/bracketed key format.
 
 --------------------------------------------------------------------------
 

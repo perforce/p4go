@@ -61,6 +61,7 @@ extern "C"
     const char* ResultGetString( P4GoResult* ret );
     const char* ResultGetBinary( P4GoResult* ret, int* len );
     Error* ResultGetError( P4GoResult* ret );
+    P4GoSpecData* ResultGetSpec( P4GoResult* ret );
     int ResultGetKeyPair( P4GoResult* ret, int index, char** var, char** val );
 
     int IsIgnored( P4GoClientApi* api, char* path );
@@ -221,6 +222,15 @@ extern "C"
                                  char* input,
                                  int dir,
                                  int* results );
+
+    // Spec data access functions
+    int SpecDataGetVar(P4GoSpecData* sd, const char* key, char** value);
+    int SpecDataGetVarCount(P4GoSpecData* sd);
+    int SpecDataGetKey(P4GoSpecData* sd, int index, char** key);
+    int SpecDataIsArray(P4GoSpecData* sd, const char* key);
+    int SpecDataGetArraySize(P4GoSpecData* sd, const char* key);
+    int SpecDataGetArrayValue(P4GoSpecData* sd, const char* key, int index, char** value);
+    void FreeSpecData(P4GoSpecData* sd);
 
 #ifdef __cplusplus
 }

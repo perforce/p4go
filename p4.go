@@ -245,7 +245,7 @@ func (p4 *P4) Disconnect() (bool, error) {
 	return result.(bool), err
 }
 
-type Dictionary map[string]string
+type Dictionary map[string]interface{}
 
 func (p4 *P4) Run(cmd string, args ...string) ([]P4Result, error) {
 	c_cmd := C.CString(cmd)
@@ -298,16 +298,9 @@ func (p4 *P4) Run(cmd string, args ...string) ([]P4Result, error) {
 				C.free(unsafe.Pointer(v))
 				results = append(results, d)
 			case P4RESULTTYPE_SPEC:
-				j := 0
-				k := (*C.char)(C.malloc(C.size_t(1)))
-				v := (*C.char)(C.malloc(C.size_t(1)))
-				d := Dictionary{}
-				for C.ResultGetKeyPair(r, C.int(j), &k, &v) != 0 {
-					j++
-					d[C.GoString(k)] = C.GoString(v)
-				}
-				C.free(unsafe.Pointer(k))
-				C.free(unsafe.Pointer(v))
+				// Convert spec result using SpecData API to properly handle arrays
+				spec := C.ResultGetSpec(r)
+				d := convertSpecDataToDict(spec)
 				results = append(results, d)
 			case P4RESULTTYPE_MESSAGE:
 				e := C.ResultGetError(r)
@@ -641,6 +634,96 @@ func (p4 *P4) SetInput(input ...string) {
 	}
 }
 
+// convertSpecDataToDict converts a P4GoSpecData pointer to a Dictionary
+// handling both scalar values and arrays properly
+func convertSpecDataToDict(spec *C.P4GoSpecData) Dictionary {
+	dict := Dictionary{}
+
+	if spec == nil {
+		return dict
+	}
+
+	// Get count of all variables (including array elements)
+	varCount := int(C.SpecDataGetVarCount(spec))
+
+	// Collect all raw key-value pairs
+	rawPairs := make(map[string]string)
+	for i := 0; i < varCount; i++ {
+		var c_key *C.char
+		var c_val *C.char
+		if C.SpecDataGetKeyPair(spec, C.int(i), &c_key, &c_val) != 0 {
+			key := C.GoString(c_key)
+			val := C.GoString(c_val)
+			rawPairs[key] = val
+			// Don't free c_key and c_val - they're internal pointers managed by SpecData
+		}
+	}
+
+	// Group keys by base name
+	baseKeys := make(map[string][]string) // baseKey -> list of full keys
+	scalarKeys := make(map[string]string) // scalar keys
+
+	for key := range rawPairs {
+		if idx := strings.Index(key, "["); idx != -1 {
+			// Array element: "View[0]" -> base="View"
+			baseKey := key[:idx]
+			baseKeys[baseKey] = append(baseKeys[baseKey], key)
+		} else {
+			// Check if this is a base key that has array elements
+			hasArrayElements := false
+			for fullKey := range rawPairs {
+				if strings.HasPrefix(fullKey, key+"[") {
+					hasArrayElements = true
+					break
+				}
+			}
+			if !hasArrayElements {
+				scalarKeys[key] = rawPairs[key]
+			}
+		}
+	}
+
+	// Add scalar values to dict
+	for key, val := range scalarKeys {
+		dict[key] = val
+	}
+
+	// Add array values to dict
+	for baseKey, keys := range baseKeys {
+		// Sort keys by index
+		indices := make(map[int]string)
+		maxIndex := -1
+
+		for _, key := range keys {
+			// Extract index from "BaseKey[123]"
+			start := strings.Index(key, "[")
+			end := strings.Index(key, "]")
+			if start != -1 && end != -1 {
+				indexStr := key[start+1 : end]
+				index, err := strconv.Atoi(indexStr)
+				if err == nil {
+					indices[index] = rawPairs[key]
+					if index > maxIndex {
+						maxIndex = index
+					}
+				}
+			}
+		}
+
+		// Build array in order
+		values := make([]string, 0, maxIndex+1)
+		for i := 0; i <= maxIndex; i++ {
+			if val, exists := indices[i]; exists {
+				values = append(values, val)
+			}
+		}
+
+		dict[baseKey] = values
+	}
+
+	return dict
+}
+
 func (p4 *P4) ParseSpec(spec string, form string) (Dictionary, error) {
 	c_spec := C.CString(spec)
 	c_form := C.CString(form)
@@ -651,32 +734,144 @@ func (p4 *P4) ParseSpec(spec string, form string) (Dictionary, error) {
 	})
 
 	s := result.(*C.P4GoSpecData)
+	defer C.FreeSpecData(s)
 
-	dict := Dictionary{}
-	i := 0
-	k := (*C.char)(C.malloc(C.size_t(1)))
-	v := (*C.char)(C.malloc(C.size_t(1)))
-	for C.SpecDataGetKeyPair(s, C.int(i), &k, &v) != 0 {
-		i++
-		dict[C.GoString(k)] = C.GoString(v)
-	}
-	//ToDo: free these pointers without causing a double free...
-	//C.free(unsafe.Pointer(k))
-	//C.free(unsafe.Pointer(v))
-	C.FreeSpecData(s)
+	dict := convertSpecDataToDict(s)
+
 	return dict, err
+}
+
+// splitNumberedKey checks if a key is in the format "FieldN" (e.g., "View0", "Paths1")
+// Returns the base key and index if it's a numbered key, otherwise returns ("", -1)
+func splitNumberedKey(key string) (string, int) {
+	// Find where digits start from the end
+	i := len(key) - 1
+	for i >= 0 && key[i] >= '0' && key[i] <= '9' {
+		i--
+	}
+
+	// If no digits found or all digits, not a numbered key
+	if i < 0 || i == len(key)-1 {
+		return "", -1
+	}
+
+	// Extract base and number
+	baseKey := key[:i+1]
+	numStr := key[i+1:]
+
+	// Parse the number
+	var index int
+	_, err := fmt.Sscanf(numStr, "%d", &index)
+	if err != nil {
+		return "", -1
+	}
+
+	return baseKey, index
+}
+
+// setArrayInStrDict sets an array of values in a StrDict with proper P4 API format
+// It sets the base key to empty string (required by P4GoSpecData::GetLine)
+// and then sets each element with [index] notation
+func setArrayInStrDict(d *C.StrDict, baseKey string, values []string) {
+	// Set dummy value for base key so GetLine doesn't bail early
+	c_baseKey := C.CString(baseKey)
+	c_dummy := C.CString("")
+	C.StrDictSetKeyPair(d, c_baseKey, c_dummy)
+	C.free(unsafe.Pointer(c_baseKey))
+	C.free(unsafe.Pointer(c_dummy))
+
+	// Set each array element with [index] notation
+	for i, item := range values {
+		arrayKey := fmt.Sprintf("%s[%d]", baseKey, i)
+		c_ak := C.CString(arrayKey)
+		c_v := C.CString(item)
+		C.StrDictSetKeyPair(d, c_ak, c_v)
+		C.free(unsafe.Pointer(c_ak))
+		C.free(unsafe.Pointer(c_v))
+	}
 }
 
 func (p4 *P4) FormatSpec(spec string, dict Dictionary) (string, error) {
 
 	d := C.NewStrDict()
-	for k, v := range dict {
-		c_k := C.CString(k)
-		c_v := C.CString(v)
-		C.StrDictSetKeyPair(d, c_k, c_v)
-		C.free(unsafe.Pointer(c_k))
-		C.free(unsafe.Pointer(c_v))
+
+	// First pass: identify which base keys have numbered variants
+	// e.g., if we see "View0", mark "View" as having numbered keys
+	numberedBaseKeys := make(map[string]bool)
+
+	for k := range dict {
+		baseKey, index := splitNumberedKey(k)
+		if index >= 0 {
+			numberedBaseKeys[baseKey] = true
+		}
 	}
+
+	// Second pass: process all keys
+	processedKeys := make(map[string]bool)
+
+	for k, v := range dict {
+		// Check if this is a numbered key
+		_, index := splitNumberedKey(k)
+		if index >= 0 {
+			// This is a numbered key (e.g., "View0")
+			// Skip it for now - we'll process all numbered keys together below
+			processedKeys[k] = true
+			continue
+		}
+
+		// Check if this key has numbered variants (e.g., "View" when "View0" exists)
+		if numberedBaseKeys[k] {
+			// Skip the base key if numbered variants exist
+			// The numbered variants will be processed below
+			processedKeys[k] = true
+			continue
+		}
+
+		c_k := C.CString(k)
+
+		switch val := v.(type) {
+		case string:
+			// Handle scalar string values
+			c_v := C.CString(val)
+			C.StrDictSetKeyPair(d, c_k, c_v)
+			C.free(unsafe.Pointer(c_v))
+			processedKeys[k] = true
+		case []string:
+			// Handle array values - convert to P4 API format
+			setArrayInStrDict(d, k, val)
+			processedKeys[k] = true
+		default:
+			// Unsupported type, skip
+			processedKeys[k] = true
+		}
+
+		C.free(unsafe.Pointer(c_k))
+	}
+
+	// Third pass: process grouped numbered keys for backward compatibility
+	// e.g., "View0", "View1", "View2" -> internal "View[0]", "View[1]", "View[2]"
+	for baseKey := range numberedBaseKeys {
+		// Collect all numbered values into an array
+		var values []string
+		i := 0
+		for {
+			numberedKey := fmt.Sprintf("%s%d", baseKey, i)
+			val, exists := dict[numberedKey]
+			if !exists {
+				break
+			}
+			if strVal, ok := val.(string); ok {
+				values = append(values, strVal)
+			}
+			i++
+		}
+
+		// Use the same helper function to set the array
+		if len(values) > 0 {
+			setArrayInStrDict(d, baseKey, values)
+		}
+	}
+
 	c_spec := C.CString(spec)
 	defer C.free(unsafe.Pointer(c_spec))
 	defer C.FreeStrDict(d)
@@ -925,8 +1120,12 @@ func (p4 *P4) SpecIterator(spec string, args ...string) ([]Dictionary, error) {
 			res, _ := p4.Run(c, "-o")
 			results = append(results, (res[0]).(Dictionary))
 		} else {
-			res, _ := p4.Run(c, "-o", specDict[k])
-			results = append(results, (res[0]).(Dictionary))
+			if keyStr, ok := specDict[k].(string); ok {
+				res, _ := p4.Run(c, "-o", keyStr)
+				results = append(results, (res[0]).(Dictionary))
+			} else {
+				return nil, errors.Join(run_err, fmt.Errorf("specDict[%s] is not a string", k))
+			}
 		}
 
 	}
@@ -968,7 +1167,12 @@ func (p4 *P4) RunLogin(args ...string) (Dictionary, error) {
 			case P4MESSAGE_FAILED, P4MESSAGE_FATAL:
 				return nil, errors.Join(run_err, &v)
 			case P4MESSAGE_INFO, P4MESSAGE_WARN:
-				return v.GetMsgDict(), nil
+				// Convert map[string]string to Dictionary (map[string]interface{})
+				dict := Dictionary{}
+				for k, val := range v.GetMsgDict() {
+					dict[k] = val
+				}
+				return dict, nil
 			}
 		case Dictionary:
 			return v, run_err

@@ -25,15 +25,16 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 *******************************************************************************/
 
-class StrBufDict;
+#ifndef P4GOSPECMGR_H
+#define P4GOSPECMGR_H
 
-class P4GoSpecData : public SpecDataTable
-{
-  public:
-    P4GoSpecData( StrDict* dict = 0 );
-    ~P4GoSpecData();
-    StrBufDict* extras;
-};
+// Forward declarations
+class StrBufDict;
+class StrDict;
+class StrPtr;
+class StrBuf;
+class Error;
+class P4GoSpecData;
 
 class P4GoSpecMgr
 {
@@ -64,8 +65,7 @@ class P4GoSpecMgr
     // Format routine. updates a StrBuf object with the form;
     // that can then be converted to a Go string where required.
     //
-    void SpecToString( const char* type, SpecData* spec, StrBuf& b, Error* e );
-
+    void SpecToString( const char* type, P4GoSpecData* spec, StrBuf& b, Error* e );
 
     //
     // Convert a Perforce StrDict into a P4::Spec object. This is for
@@ -74,7 +74,6 @@ class P4GoSpecMgr
     // argument tells us what type of spec we're converting.
     //
     P4GoSpecData* StrDictToSpec( StrDict* dict, StrPtr* specDef );
-
 
     //
     // Return a list of the fields in a given type of spec. Return null
@@ -92,3 +91,5 @@ class P4GoSpecMgr
     int convertArray;
     StrBufDict* specs;
 };
+
+#endif // P4GOSPECMGR_H

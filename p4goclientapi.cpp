@@ -35,6 +35,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <p4/ignore.h>
 #include <p4/debug.h>
 #include "p4gospecmgr.h"
+#include "p4gospecdata.h"
 #include "p4goresult.h"
 #include "p4gomergedata.h"
 #include "p4goclientuser.h"

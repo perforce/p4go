@@ -514,9 +514,34 @@ func (s *PerforceTestSuite) TestClient() {
 	client_specs["Root"] = s.clientRoot
 	client_specs["Description"] = "Test client... \n"
 
+	// Add multiline view mappings as an array of strings with comment
+	clientName := client_specs["Client"].(string)
+	client_specs["View"] = []string{
+		"//depot/... //" + clientName + "/...",
+		"//depot/... //" + clientName + "/test/... ##comment check",
+		"## Newline Comment",
+	}
+
 	assert.IsType(s.T(), Dictionary{}, client_specs, "Client wasn't a p4.Dictionary object")
 	msg, _ := s.p4api.RunSave("client", client_specs)
-	assert.Equal(s.T(), "Client "+client_specs["Client"]+" saved.", msg.String(), "Failed to save client")
+	assert.Equal(s.T(), "Client "+client_specs["Client"].(string)+" saved.", msg.String(), "Failed to save client")
+
+	client_specs, err = s.p4api.RunFetch("client", clientName)
+
+	if err != nil {
+		assert.Fail(s.T(), "failed to get client dict")
+	}
+
+	assert.Equal(s.T(), client_specs["View"].([]string)[0], "//depot/... //"+clientName+"/...", "Client view mapping 1 mismatch")
+	assert.Equal(s.T(), client_specs["View"].([]string)[1], "//depot/... //"+clientName+"/test/... ##comment check", "Client view mapping 2 mismatch")
+	assert.Equal(s.T(), client_specs["View"].([]string)[2], "## Newline Comment", "Client view mapping 3 mismatch")
+
+	client_specs, err = s.p4api.RunFetch("client", clientName)
+
+	if err != nil {
+		assert.Fail(s.T(), "failed to get client dict")
+	}
+
 	client_specs2, err := s.p4api.RunFetch("client")
 
 	if err != nil {
@@ -976,8 +1001,8 @@ func (s *PerforceTestSuite) TestResolve() {
 		s.p4api.SetResolveHandler(handler)
 		res, _ := s.p4api.Run("resolve")
 		info := res[0].(Dictionary)
-		assert.Equal(s.T(), "//depot/test_resolve/foo", info["fromFile"], "Unexpected fromFile in info: "+info["fromFile"])
-		assert.Equal(s.T(), "branch", info["resolveType"], "Unexpected resolveType in info: "+info["resolveType"])
+		assert.Equal(s.T(), "//depot/test_resolve/foo", info["fromFile"], "Unexpected fromFile in info: "+fmt.Sprintf("%v", info["fromFile"]))
+		assert.Equal(s.T(), "branch", info["resolveType"], "Unexpected resolveType in info: "+fmt.Sprintf("%v", info["resolveType"]))
 
 		changeSpec, err = s.p4api.RunFetch("change")
 		require.NoError(s.T(), err, "Failed to fetch change")
@@ -1184,7 +1209,7 @@ func (s *PerforceTestSuite) TestPassword() {
 	_, err = os.Stat(s.p4api.TicketFile())
 	require.False(s.T(), os.IsNotExist(err), "Ticket file not created")
 
-	s.p4api.SetUser(oldUser)
+	s.p4api.SetUser(oldUser.(string))
 
 	allticket, _ := s.p4api.RunTickets()
 	require.Len(s.T(), allticket, 2, "Unexpected number of tickets found.")
@@ -1264,22 +1289,12 @@ func (s *PerforceTestSuite) TestMap() {
 func (s *PerforceTestSuite) TestSpecs() {
 
 	JOBSPEC :=
-		`Fields:
-        101 Job word 32 required
-        102 Status select 10 required
-        103 User word 32 required
-        104 Date date 20 always
-        105 Description text 0 required
-        106 Field1 text 0 optional
-
-Values:
-        Status open/suspended/closed
-
-Presets:
-        Status open
-        User $user
-        Date $now
-        Description $blank`
+		`Job:	new
+Status:	open
+User:	super-user
+Description:
+	<enter description here>
+`
 
 	BRANCHSPEC :=
 		`Branch:	test_branch
@@ -1288,7 +1303,9 @@ Access:	2012/01/01 00:00:00
 Owner:	test
 Description: Created by test.
 Options:	unlocked
-View:     //depot/main/... //depot/rel/...`
+View:     //depot/main/... //depot/rel/...
+          //depot/main/... //depot/rel2/...  ## With Comments
+		  ## New Comment line`
 
 	CHANGESPEC :=
 		`Change:	new
@@ -1304,6 +1321,7 @@ Description:
 	  <enter description here>
 Files: //depot/filea
 	  //depot/fileb
+	  ## New Comment line
 `
 
 	CLIENTSPEC :=
@@ -1324,7 +1342,8 @@ StreamAtChange:	@200
 LineEnd:	local
 ServerID:	testid
 View:
-	  //depot/... //test_client/...`
+	  //depot/... //test_client/... ## Inline Comment
+	  ## New Comment line`
 
 	DEPOTSPEC :=
 		`Depot:	spec
@@ -1336,7 +1355,8 @@ Type:	local
 Address:	local
 Suffix:	.p4s
 Map:	spec/...
-SpecMap:	//spec/...
+SpecMap:	//spec/... ## Inline Comment
+	  ## New Comment line
 	  -//spec/client/...`
 
 	GROUPSPEC :=
@@ -1360,7 +1380,8 @@ Description:
 Options:	unlocked noautoreload
 Revision:	@1234
 View:
-	  //depot/...`
+	  //depot/... ## Inline Comment
+	  ## New Comment line`
 
 	PROTECTSPEC :=
 		`Protections:
@@ -1386,8 +1407,9 @@ Ignored:
 	  excluded/...
 View:
 	  //stream/main/... ...
-	  //stream/main/test/... test_remap/...
-	  -//stream/...excluded/... ...excluded/...`
+	  //stream/main/test/... test_remap/... ## Inline Comment
+	  -//stream/...excluded/... ...excluded/...
+	  ## New Comment line`
 
 	TRIGGERSPEC :=
 		`Triggers:
@@ -1456,34 +1478,16 @@ GconnMirrorHideFetchUrl:	false`
 	assert.Nil(s.T(), err, "Failed to connect to Perforce server")
 	assert.True(s.T(), s.p4api.Connected(), "Failed to connect to Perforce server")
 
-	_, _ = s.p4api.Run("job", "-i", JOBSPEC)
+	// Job
+	job, err := s.p4api.ParseSpec("job", JOBSPEC)
+	if err != nil {
+		s.T().Fatalf("Failed to parse job spec: %v", err)
+	}
 
-	job, _ := s.p4api.RunFetch("job")
-	job["Field1"] = "some text"
-	job["Description"] = "some more text"
-
-	msg, _ := s.p4api.RunSave("job", job)
-	assert.Equal(s.T(), msg.String(), "Job job000001 saved.")
-
-	spec, _ := s.p4api.RunFetch("job")
-
-	assert.IsTypef(s.T(), Dictionary{}, spec, "Expected type %T, but got %T", Dictionary{}, spec)
-	fspec, err := s.p4api.FormatSpec("job", spec)
-	s.Require().NoError(err, "Failed to format spec")
-	assert.IsTypef(s.T(), "", fspec, "Expected type %T, but got %T", "", fspec)
-	spec, err = s.p4api.ParseSpec("job", fspec)
-	s.Require().NoError(err, "Failed to parse spec")
-	assert.IsTypef(s.T(), Dictionary{}, spec, "Expected type %T, but got %T", Dictionary{}, spec)
-	spec, _ = s.p4api.RunFetch("job", "job000001")
-	assert.IsTypef(s.T(), Dictionary{}, spec, "Expected type %T, but got %T", Dictionary{}, spec)
-
-	// // Check if the 'Field1' key exists in the spec map
-	// _, exists := spec["Field0"]
-	// assert.True(s.T(), exists, "spec does not contain the key 'Field1'")
-
-	//
-	// Test the Spec Manager
-	//
+	assert.Equal(s.T(), job["Job"], "new", "Key 'Job' has unexpected value in job P4::Spec")
+	assert.Equal(s.T(), job["Status"], "open", "Key 'Status' has unexpected value in job P4::Spec")
+	assert.Equal(s.T(), job["User"], "super-user", "Key 'User' has unexpected value in job P4::Spec")
+	assert.NotEmpty(s.T(), job["Description"], "Key 'Description' has unexpected value in job P4::Spec")
 
 	// Branch
 	branch, err := s.p4api.ParseSpec("branch", BRANCHSPEC)
@@ -1498,160 +1502,170 @@ GconnMirrorHideFetchUrl:	false`
 	if err != nil {
 		s.T().Fatalf("Failed to parse branch spec: %v", err)
 	}
-	assert.NotEmpty(s.T(), branch["Branch"], "Key 'Branch' missing from branch P4::Spec")
-	assert.NotEmpty(s.T(), branch["Update"], "Key 'Update' missing from branch P4::Spec")
-	assert.NotEmpty(s.T(), branch["Access"], "Key 'Access' missing from branch P4::Spec")
-	assert.NotEmpty(s.T(), branch["Owner"], "Key 'Owner' missing from branch P4::Spec")
-	assert.NotEmpty(s.T(), branch["Description"], "Key 'Description' missing from branch P4::Spec")
-	assert.NotEmpty(s.T(), branch["Options"], "Key 'Options' missing from branch P4::Spec")
-	assert.NotEmpty(s.T(), branch["View0"], "Key 'View' missing from branch P4::Spec")
+	assert.Equal(s.T(), branch["Branch"], "test_branch", "Key 'Branch' has unexpected value in branch P4::Spec")
+	assert.Equal(s.T(), branch["Update"], "2011/01/01 00:00:00", "Key 'Update' has unexpected value in branch P4::Spec")
+	assert.Equal(s.T(), branch["Access"], "2012/01/01 00:00:00", "Key 'Access' has unexpected value in branch P4::Spec")
+	assert.Equal(s.T(), branch["Owner"], "test", "Key 'Owner' has unexpected value in branch P4::Spec")
+	assert.NotEmpty(s.T(), branch["Description"], "Created by test.", "Key 'Description' has unexpected value in branch P4::Spec")
+	assert.Equal(s.T(), branch["Options"], "unlocked", "Key 'Options' has unexpected value in branch P4::Spec")
+	assert.Equal(s.T(), branch["View"], []string{"//depot/main/... //depot/rel/...", "//depot/main/... //depot/rel2/... ## With Comments", "## New Comment line"}, "Key 'View' has unexpected value in branch P4::Spec")
 
 	// Change
-
 	change, err := s.p4api.ParseSpec("change", CHANGESPEC)
 	if err != nil {
 		s.T().Fatalf("Failed to parse change spec: %v", err)
 	}
-	assert.NotEmpty(s.T(), change["Change"], "Key 'Change' missing from change P4::Spec")
-	assert.NotEmpty(s.T(), change["Date"], "Key 'Date' missing from change P4::Spec")
-	assert.NotEmpty(s.T(), change["Client"], "Key 'Client' missing from change P4::Spec")
-	assert.NotEmpty(s.T(), change["User"], "Key 'User' missing from change P4::Spec")
-	assert.NotEmpty(s.T(), change["Status"], "Key 'Status' missing from change P4::Spec")
-	assert.NotEmpty(s.T(), change["Type"], "Key 'Type' missing from change P4::Spec")
-	assert.NotEmpty(s.T(), change["Description"], "Key 'Description' missing from change P4::Spec")
-	assert.NotEmpty(s.T(), change["JobStatus"], "Key 'JobStatus' missing from change P4::Spec")
-	assert.NotEmpty(s.T(), change["Jobs0"], "Key 'Jobs' missing from change P4::Spec")
-	assert.NotEmpty(s.T(), change["Files0"], "Key 'Files' missing from change P4::Spec")
+
+	assert.Equal(s.T(), change["Change"], "new", "Key 'Change' has unexpected value in change P4::Spec")
+	assert.Equal(s.T(), change["Date"], "2012/01/01 00:00:00", "Key 'Date' has unexpected value in change P4::Spec")
+	assert.Equal(s.T(), change["Client"], "jmistry_mac_p4go", "Key 'Client' has unexpected value in change P4::Spec")
+	assert.Equal(s.T(), change["User"], "jmistry", "Key 'User' has unexpected value in change P4::Spec")
+	assert.Equal(s.T(), change["Status"], "new", "Key 'Status' has unexpected value in change P4::Spec")
+	assert.Equal(s.T(), change["Type"], "restricted", "Key 'Type' has unexpected value in change P4::Spec")
+	assert.Equal(s.T(), change["JobStatus"], "open", "Key 'JobStatus' has unexpected value in change P4::Spec")
+	assert.NotEmpty(s.T(), change["Description"], "Key 'Description' has unexpected value in change P4::Spec")
+	assert.Equal(s.T(), change["Jobs"], []string{"job000001", "job000002"}, "Key 'Jobs' has unexpected value in change P4::Spec")
+	assert.Equal(s.T(), change["Files"], []string{"//depot/filea", "//depot/fileb", "## New Comment line"}, "Key 'Files' has unexpected value in change P4::Spec")
 
 	// Client
 	client, err := s.p4api.ParseSpec("client", CLIENTSPEC)
 	if err != nil {
 		s.T().Fatalf("Failed to parse client spec: %v", err)
 	}
-	assert.NotEmpty(s.T(), client["Client"], "Key 'Client' missing from client P4::Spec")
-	assert.NotEmpty(s.T(), client["Update"], "Key 'Update' missing from client P4::Spec")
-	assert.NotEmpty(s.T(), client["Access"], "Key 'Access' missing from client P4::Spec")
-	assert.NotEmpty(s.T(), client["Owner"], "Key 'Owner' missing from client P4::Spec")
-	assert.NotEmpty(s.T(), client["Host"], "Key 'Host' missing from client P4::Spec")
+
+	assert.Equal(s.T(), client["Client"], "test_client", "Key 'Client' has unexpected value in client P4::Spec")
+	assert.Equal(s.T(), client["Update"], "2011/01/01 00:00:00", "Key 'Update' has unexpected value in client P4::Spec")
+	assert.Equal(s.T(), client["Access"], "2012/01/01 00:00:00", "Key 'Access' has unexpected value in client P4::Spec")
+	assert.Equal(s.T(), client["Owner"], "test", "Key 'Owner' has unexpected value in client P4::Spec")
+	assert.Equal(s.T(), client["Host"], "test_host", "Key 'Host' has unexpected value in client P4::Spec")
+	assert.Equal(s.T(), client["Root"], "/test/path", "Key 'Root' has unexpected value in client P4::Spec")
 	assert.NotEmpty(s.T(), client["Description"], "Key 'Description' missing from client P4::Spec")
-	assert.NotEmpty(s.T(), client["Root"], "Key 'Root' missing from client P4::Spec")
-	assert.NotEmpty(s.T(), client["AltRoots0"], "Key 'AltRoots' missing from client P4::Spec")
-	assert.NotEmpty(s.T(), client["Options"], "Key 'Options' missing from client P4::Spec")
-	assert.NotEmpty(s.T(), client["SubmitOptions"], "Key 'SubmitOptions' missing from client P4::Spec")
-	assert.NotEmpty(s.T(), client["LineEnd"], "Key 'LineEnd' missing from client P4::Spec")
-	assert.NotEmpty(s.T(), client["Stream"], "Key 'Stream' missing from client P4::Spec")
-	assert.NotEmpty(s.T(), client["StreamAtChange"], "Key 'StreamAtChange' missing from client P4::Spec")
-	assert.NotEmpty(s.T(), client["ServerID"], "Key 'ServerID' missing from client P4::Spec")
-	assert.NotEmpty(s.T(), client["View0"], "Key 'View' missing from client P4::Spec")
+	assert.Equal(s.T(), client["AltRoots"], []string{"/alt/path"}, "Key 'AltRoots' has unexpected value in client P4::Spec")
+	assert.Equal(s.T(), client["Options"], "noallwrite noclobber nocompress unlocked nomodtime normdir", "Key 'Options' has unexpected value in client P4::Spec")
+	assert.Equal(s.T(), client["SubmitOptions"], "submitunchanged", "Key 'SubmitOptions' has unexpected value in client P4::Spec")
+	assert.Equal(s.T(), client["LineEnd"], "local", "Key 'LineEnd' has unexpected value in client P4::Spec")
+	assert.Equal(s.T(), client["Stream"], "//stream/main", "Key 'Stream' has unexpected value in client P4::Spec")
+	assert.Equal(s.T(), client["StreamAtChange"], "@200", "Key 'StreamAtChange' has unexpected value in client P4::Spec")
+	assert.Equal(s.T(), client["ServerID"], "testid", "Key 'ServerID' has unexpected value in client P4::Spec")
+	assert.Equal(s.T(), client["View"], []string{"//depot/... //test_client/... ## Inline Comment", "## New Comment line"}, "Key 'View' has unexpected value in client P4::Spec")
 
 	// Depot
 	depot, err := s.p4api.ParseSpec("depot", DEPOTSPEC)
 	if err != nil {
 		s.T().Fatalf("Failed to parse depot spec: %v", err)
 	}
-	assert.NotEmpty(s.T(), depot["Depot"], "Key 'Depot' missing from depot P4::Spec")
-	assert.NotEmpty(s.T(), depot["Owner"], "Key 'Owner' missing from depot P4::Spec")
-	assert.NotEmpty(s.T(), depot["Date"], "Key 'Date' missing from depot P4::Spec")
+
+	assert.Equal(s.T(), depot["Depot"], "spec", "Key 'Depot' has unexpected value in depot P4::Spec")
+	assert.Equal(s.T(), depot["Owner"], "test", "Key 'Owner' has unexpected value in depot P4::Spec")
+	assert.Equal(s.T(), depot["Date"], "2012/01/01 00:00:00", "Key 'Date' has unexpected value in depot P4::Spec")
 	assert.NotEmpty(s.T(), depot["Description"], "Key 'Description' missing from depot P4::Spec")
-	assert.NotEmpty(s.T(), depot["Type"], "Key 'Type' missing from depot P4::Spec")
-	assert.NotEmpty(s.T(), depot["Address"], "Key 'Address' missing from depot P4::Spec")
-	assert.NotEmpty(s.T(), depot["Suffix"], "Key 'Suffix' missing from depot P4::Spec")
-	assert.NotEmpty(s.T(), depot["Map"], "Key 'Map' missing from depot P4::Spec")
-	assert.NotEmpty(s.T(), depot["SpecMap0"], "Key 'SpecMap' missing from depot P4::Spec")
+	assert.Equal(s.T(), depot["Type"], "local", "Key 'Type' has unexpected value in depot P4::Spec")
+	assert.Equal(s.T(), depot["Address"], "local", "Key 'Address' has unexpected value in depot P4::Spec")
+	assert.Equal(s.T(), depot["Suffix"], ".p4s", "Key 'Suffix' has unexpected value in depot P4::Spec")
+	assert.Equal(s.T(), depot["Map"], "spec/...", "Key 'Map' has unexpected value in depot P4::Spec")
+	assert.Equal(s.T(), depot["SpecMap"], []string{"//spec/... ## Inline Comment", "## New Comment line", "-//spec/client/..."}, "Key 'SpecMap' has unexpected value in depot P4::Spec")
 
 	// Group
 	group, err := s.p4api.ParseSpec("group", GROUPSPEC)
 	if err != nil {
 		s.T().Fatalf("Failed to parse group spec: %v", err)
 	}
-	assert.NotEmpty(s.T(), group["Group"], "Key 'Group' missing from group P4::Spec")
-	assert.NotEmpty(s.T(), group["MaxResults"], "Key 'MaxResults' missing from group P4::Spec")
-	assert.NotEmpty(s.T(), group["MaxScanRows"], "Key 'MaxScanRows' missing from group P4::Spec")
-	assert.NotEmpty(s.T(), group["MaxLockTime"], "Key 'MaxLockTime' missing from group P4::Spec")
-	assert.NotEmpty(s.T(), group["Timeout"], "Key 'Timeout' missing from group P4::Spec")
-	assert.NotEmpty(s.T(), group["PasswordTimeout"], "Key 'PasswordTimeout' missing from group P4::Spec")
-	assert.NotEmpty(s.T(), group["Subgroups0"], "Key 'Subgroups' missing from group P4::Spec")
-	assert.NotEmpty(s.T(), group["Owners0"], "Key 'Owners' missing from group P4::Spec")
-	assert.NotEmpty(s.T(), group["Users0"], "Key 'Users' missing from group P4::Spec")
+
+	assert.Equal(s.T(), group["Group"], "test_group", "Key 'Group' has unexpected value in group P4::Spec")
+	assert.Equal(s.T(), group["MaxResults"], "unset", "Key 'MaxResults' has unexpected value in group P4::Spec")
+	assert.Equal(s.T(), group["MaxScanRows"], "unset", "Key 'MaxScanRows' has unexpected value in group P4::Spec")
+	assert.Equal(s.T(), group["MaxLockTime"], "unset", "Key 'MaxLockTime' has unexpected value in group P4::Spec")
+	assert.Equal(s.T(), group["Timeout"], "43200", "Key 'Timeout' has unexpected value in group P4::Spec")
+	assert.Equal(s.T(), group["PasswordTimeout"], "unset", "Key 'PasswordTimeout' has unexpected value in group P4::Spec")
+	assert.Equal(s.T(), group["Subgroups"], []string{"test_subgroup"}, "Key 'Subgroups' has unexpected value in group P4::Spec")
+	assert.Equal(s.T(), group["Owners"], []string{"test_owner"}, "Key 'Owners' has unexpected value in group P4::Spec")
+	assert.Equal(s.T(), group["Users"], []string{"test_user"}, "Key 'Users' has unexpected value in group P4::Spec")
 
 	// Label
 	label, err := s.p4api.ParseSpec("label", LABELSPEC)
 	if err != nil {
 		s.T().Fatalf("Failed to parse label spec: %v", err)
 	}
-	assert.NotEmpty(s.T(), label["Label"], "Key 'Label' missing from label P4::Spec")
-	assert.NotEmpty(s.T(), label["Update"], "Key 'Update' missing from label P4::Spec")
-	assert.NotEmpty(s.T(), label["Access"], "Key 'Access' missing from label P4::Spec")
-	assert.NotEmpty(s.T(), label["Owner"], "Key 'Owner' missing from label P4::Spec")
+
+	assert.Equal(s.T(), label["Label"], "label1", "Key 'Label' has unexpected value in label P4::Spec")
+	assert.Equal(s.T(), label["Update"], "2005/03/07 09:51:29", "Key 'Update' has unexpected value in label P4::Spec")
+	assert.Equal(s.T(), label["Access"], "2012/01/18 11:11:29", "Key 'Access' has unexpected value in label P4::Spec")
+	assert.Equal(s.T(), label["Owner"], "jkao", "Key 'Owner' has unexpected value in label P4::Spec")
 	assert.NotEmpty(s.T(), label["Description"], "Key 'Description' missing from label P4::Spec")
-	assert.NotEmpty(s.T(), label["Options"], "Key 'Options' missing from label P4::Spec")
-	assert.NotEmpty(s.T(), label["Revision"], "Key 'Revision' missing from label P4::Spec")
-	assert.NotEmpty(s.T(), label["View0"], "Key 'View' missing from label P4::Spec")
+	assert.Equal(s.T(), label["Options"], "unlocked noautoreload", "Key 'Options' has unexpected value in label P4::Spec")
+	assert.Equal(s.T(), label["Revision"], "@1234", "Key 'Revision' has unexpected value in label P4::Spec")
+	assert.Equal(s.T(), label["View"], []string{"//depot/... ## Inline Comment", "## New Comment line"}, "Key 'View' has unexpected value in label P4::Spec")
 
 	// Protect
 	protect, err := s.p4api.ParseSpec("protect", PROTECTSPEC)
 	if err != nil {
 		s.T().Fatalf("Failed to parse protect spec: %v", err)
 	}
-	assert.NotEmpty(s.T(), protect["Protections0"], "Key 'Protections' missing from protect P4::Spec")
+	assert.Equal(s.T(), protect["Protections"], []string{"write user * * //...", "super user test * //..."}, "Key 'Protections' has unexpected value in protect P4::Spec")
 
 	// Stream
 	stream, err := s.p4api.ParseSpec("stream", STREAMSPEC)
 	if err != nil {
 		s.T().Fatalf("Failed to parse stream spec: %v", err)
 	}
-	assert.NotEmpty(s.T(), stream["Stream"], "Key 'Stream' missing from stream P4::Spec")
-	assert.NotEmpty(s.T(), stream["Update"], "Key 'Update' missing from stream P4::Spec")
-	assert.NotEmpty(s.T(), stream["Access"], "Key 'Access' missing from stream P4::Spec")
-	assert.NotEmpty(s.T(), stream["Owner"], "Key 'Owner' missing from stream P4::Spec")
-	assert.NotEmpty(s.T(), stream["Name"], "Key 'Name' missing from stream P4::Spec")
-	assert.NotEmpty(s.T(), stream["Parent"], "Key 'Parent' missing from stream P4::Spec")
-	assert.NotEmpty(s.T(), stream["Type"], "Key 'Type' missing from stream P4::Spec")
+
+	assert.Equal(s.T(), stream["Stream"], "//stream/main", "Key 'Stream' has unexpected value in stream P4::Spec")
+	assert.Equal(s.T(), stream["Update"], "2011/01/01 00:00:00", "Key 'Update' has unexpected value in stream P4::Spec")
+	assert.Equal(s.T(), stream["Access"], "2012/01/01 00:00:00", "Key 'Access' has unexpected value in stream P4::Spec")
+	assert.Equal(s.T(), stream["Owner"], "test", "Key 'Owner' has unexpected value in stream P4::Spec")
+	assert.Equal(s.T(), stream["Name"], "main", "Key 'Name' has unexpected value in stream P4::Spec")
+	assert.Equal(s.T(), stream["Parent"], "none", "Key 'Parent' has unexpected value in stream P4::Spec")
+	assert.Equal(s.T(), stream["Type"], "mainline", "Key 'Type' has unexpected value in stream P4::Spec")
 	assert.NotEmpty(s.T(), stream["Description"], "Key 'Description' missing from stream P4::Spec")
-	assert.NotEmpty(s.T(), stream["Options"], "Key 'Options' missing from stream P4::Spec")
-	assert.NotEmpty(s.T(), stream["Paths0"], "Key 'Paths' missing from stream P4::Spec")
-	assert.NotEmpty(s.T(), stream["Remapped0"], "Key 'Remapped' missing from stream P4::Spec")
-	assert.NotEmpty(s.T(), stream["Ignored0"], "Key 'Ignored' missing from stream P4::Spec")
-	assert.NotEmpty(s.T(), stream["View0"], "Key 'View' missing from stream P4::Spec")
+	assert.Equal(s.T(), stream["Options"], "allsubmit unlocked toparent fromparent", "Key 'Options' has unexpected value in stream P4::Spec")
+	assert.Equal(s.T(), stream["Paths"], []string{"share ..."}, "Key 'Paths' has unexpected value in stream P4::Spec")
+	assert.Equal(s.T(), stream["Remapped"], []string{"test/...	test_remap/..."}, "Key 'Remapped' has unexpected value in stream P4::Spec")
+	assert.Equal(s.T(), stream["Ignored"], []string{"excluded/..."}, "Key 'Ignored' has unexpected value in stream P4::Spec")
+	assert.Equal(s.T(), stream["View"], []string{"//stream/main/... ...", "//stream/main/test/... test_remap/... ## Inline Comment", "-//stream/...excluded/... ...excluded/...", "## New Comment line"}, "Key 'View' has unexpected value in stream P4::Spec")
 
 	// Triggers
 	trigger, err := s.p4api.ParseSpec("triggers", TRIGGERSPEC)
 	if err != nil {
 		s.T().Fatalf("Failed to parse triggers spec: %v", err)
 	}
-	assert.NotEmpty(s.T(), trigger["Triggers0"], "Key 'Triggers' missing from trigger P4::Spec")
+
+	assert.Equal(s.T(), trigger["Triggers"], []string{"name form-out change \"/some/script\""}, "Key 'Triggers' has unexpected value in triggers P4::Spec")
 
 	// Typemap
 	typemap, err := s.p4api.ParseSpec("typemap", TYPEMAPSPEC)
 	if err != nil {
 		s.T().Fatalf("Failed to parse typemap spec: %v", err)
 	}
-	assert.NotEmpty(s.T(), typemap["TypeMap0"], "Key 'TypeMap' missing from typemap P4::Spec")
+
+	assert.Equal(s.T(), typemap["TypeMap"], []string{"+l //....docx"}, "Key 'TypeMap' has unexpected value in typemap P4::Spec")
 
 	// User
 	user, err := s.p4api.ParseSpec("user", USERSPEC)
 	if err != nil {
 		s.T().Fatalf("Failed to parse user spec: %v", err)
 	}
-	assert.NotEmpty(s.T(), user["User"], "Key 'User' missing from user P4::Spec")
-	assert.NotEmpty(s.T(), user["Type"], "Key 'Type' missing from user P4::Spec")
-	assert.NotEmpty(s.T(), user["Update"], "Key 'Update' missing from user P4::Spec")
-	assert.NotEmpty(s.T(), user["Access"], "Key 'Access' missing from user P4::Spec")
-	assert.NotEmpty(s.T(), user["FullName"], "Key 'FullName' missing from user P4::Spec")
-	assert.NotEmpty(s.T(), user["JobView"], "Key 'JobView' missing from user P4::Spec")
-	assert.NotEmpty(s.T(), user["Password"], "Key 'Password' missing from user P4::Spec")
-	assert.NotEmpty(s.T(), user["Reviews0"], "Key 'Reviews' missing from user P4::Spec")
+
+	assert.Equal(s.T(), user["User"], "test", "Key 'User' has unexpected value in user P4::Spec")
+	assert.Equal(s.T(), user["Type"], "standard", "Key 'Type' has unexpected value in user P4::Spec")
+	assert.Equal(s.T(), user["Email"], "test@test", "Key 'Email' has unexpected value in user P4::Spec")
+	assert.Equal(s.T(), user["Update"], "2011/01/01 00:00:00", "Key 'Update' has unexpected value in user P4::Spec")
+	assert.Equal(s.T(), user["Access"], "2012/01/01 00:00:00", "Key 'Access' has unexpected value in user P4::Spec")
+	assert.Equal(s.T(), user["FullName"], "test", "Key 'FullName' has unexpected value in user P4::Spec")
+	assert.Equal(s.T(), user["JobView"], "status=open", "Key 'JobView' has unexpected value in user P4::Spec")
+	assert.Equal(s.T(), user["Password"], "testpass", "Key 'Password' has unexpected value in user P4::Spec")
+	assert.Equal(s.T(), user["Reviews"], []string{"//depot/path/..."}, "Key 'Reviews' has unexpected value in user P4::Spec")
 
 	// Server
 	server, err := s.p4api.ParseSpec("server", SERVERSPEC)
 	if err != nil {
 		s.T().Fatalf("Failed to parse server spec: %v", err)
 	}
-	assert.NotEmpty(s.T(), server["ServerID"], "Key 'ServerID' missing from server P4::Spec")
-	assert.NotEmpty(s.T(), server["Type"], "Key 'Type' missing from server P4::Spec")
-	assert.NotEmpty(s.T(), server["Name"], "Key 'Name' missing from server P4::Spec")
-	assert.NotEmpty(s.T(), server["Address"], "Key 'Address' missing from server P4::Spec")
-	assert.NotEmpty(s.T(), server["Services"], "Key 'Services' missing from server P4::Spec")
+
+	assert.Equal(s.T(), server["ServerID"], "418777F0-F7A5-439B-BAFC-E790E7286188", "Key 'ServerID' has unexpected value in server P4::Spec")
+	assert.Equal(s.T(), server["Type"], "server", "Key 'Type' has unexpected value in server P4::Spec")
+	assert.Equal(s.T(), server["Name"], "Maser", "Key 'Name' has unexpected value in server P4::Spec")
+	assert.Equal(s.T(), server["Address"], "1666", "Key 'Address' has unexpected value in server P4::Spec")
+	assert.Equal(s.T(), server["Services"], "standard", "Key 'Services' has unexpected value in server P4::Spec")
 	assert.NotEmpty(s.T(), server["Description"], "Key 'Description' missing from server P4::Spec")
 
 	// LDAP
@@ -1659,47 +1673,51 @@ GconnMirrorHideFetchUrl:	false`
 	if err != nil {
 		s.T().Fatalf("Failed to parse ldap spec: %v", err)
 	}
-	assert.NotEmpty(s.T(), ldap["Name"], "Key 'Name' missing from ldap P4::Spec")
-	assert.NotEmpty(s.T(), ldap["Host"], "Key 'Host' missing from ldap P4::Spec")
-	assert.NotEmpty(s.T(), ldap["Port"], "Key 'Port' missing from ldap P4::Spec")
-	assert.NotEmpty(s.T(), ldap["Encryption"], "Key 'Encryption' missing from ldap P4::Spec")
-	assert.NotEmpty(s.T(), ldap["BindMethod"], "Key 'BindMethod' missing from ldap P4::Spec")
-	assert.NotEmpty(s.T(), ldap["Options"], "Key 'Options' missing from ldap P4::Spec")
-	assert.NotEmpty(s.T(), ldap["SimplePattern"], "Key 'SimplePattern' missing from ldap P4::Spec")
-	assert.NotEmpty(s.T(), ldap["SearchBaseDN"], "Key 'SearchBaseDN' missing from ldap P4::Spec")
-	assert.NotEmpty(s.T(), ldap["SearchFilter"], "Key 'SearchFilter' missing from ldap P4::Spec")
-	assert.NotEmpty(s.T(), ldap["SearchScope"], "Key 'SearchScope' missing from ldap P4::Spec")
-	assert.NotEmpty(s.T(), ldap["GroupSearchScope"], "Key 'GroupSearchScope' missing from ldap P4::Spec")
+
+	assert.Equal(s.T(), ldap["Name"], "myLDAPconfig", "Key 'Name' has unexpected value in ldap P4::Spec")
+	assert.Equal(s.T(), ldap["Host"], "openldap.example.com", "Key 'Host' has unexpected value in ldap P4::Spec")
+	assert.Equal(s.T(), ldap["Port"], "389", "Key 'Port' has unexpected value in ldap P4::Spec")
+	assert.Equal(s.T(), ldap["Encryption"], "tls", "Key 'Encryption' has unexpected value in ldap P4::Spec")
+	assert.Equal(s.T(), ldap["BindMethod"], "search", "Key 'BindMethod' has unexpected value in ldap P4::Spec")
+	assert.Equal(s.T(), ldap["Options"], "nodowncase nogetattrs norealminusername", "Key 'Options' has unexpected value in ldap P4::Spec")
+	assert.Equal(s.T(), ldap["SimplePattern"], "someuserid", "Key 'SimplePattern' has unexpected value in ldap P4::Spec")
+	assert.Equal(s.T(), ldap["SearchBaseDN"], "ou=employees,dc=example,dc=com", "Key 'SearchBaseDN' has unexpected value in ldap P4::Spec")
+	assert.Equal(s.T(), ldap["SearchFilter"], "(cn=%user%)", "Key 'SearchFilter' has unexpected value in ldap P4::Spec")
+	assert.Equal(s.T(), ldap["SearchScope"], "subtree", "Key 'SearchScope' has unexpected value in ldap P4::Spec")
+	assert.Equal(s.T(), ldap["GroupSearchScope"], "subtree", "Key 'GroupSearchScope' has unexpected value in ldap P4::Spec")
 
 	// Remote
 	remote, err := s.p4api.ParseSpec("remote", REMOTESPEC)
 	if err != nil {
 		s.T().Fatalf("Failed to parse remote spec: %v", err)
 	}
-	assert.NotEmpty(s.T(), remote["RemoteID"], "Key 'Name' missing from remote P4::Spec")
-	assert.NotEmpty(s.T(), remote["Address"], "Key 'Address' missing from remote P4::Spec")
-	assert.NotEmpty(s.T(), remote["Description"], "Key 'Description' missing from remote P4::Spec")
-	assert.NotEmpty(s.T(), remote["DepotMap0"], "Key 'DepotMap' missing from remote P4::Spec")
+
+	assert.Equal(s.T(), remote["RemoteID"], "test_remote", "Key 'RemoteID' has unexpected value in remote P4::Spec")
+	assert.Equal(s.T(), remote["Address"], "localhost:1666", "Key 'Address' has unexpected value in remote P4::Spec")
+	assert.NotEmpty(s.T(), remote["Description"], "Key 'Description' has unexpected value in remote P4::Spec")
+	assert.Equal(s.T(), remote["DepotMap"], []string{"//... //remote/test_depot/..."}, "Key 'DepotMap' has unexpected value in remote P4::Spec")
 
 	// Repo
 	repo, err := s.p4api.ParseSpec("repo", REPOSPEC)
 	if err != nil {
 		s.T().Fatalf("Failed to parse repo spec: %v", err)
 	}
-	assert.NotEmpty(s.T(), repo["Repo"], "Key 'Repo' missing from repo P4::Spec")
-	assert.NotEmpty(s.T(), repo["Owner"], "Key 'Owner' missing from repo P4::Spec")
-	assert.NotEmpty(s.T(), repo["Created"], "Key 'Created' missing from repo P4::Spec")
-	assert.NotEmpty(s.T(), repo["Description"], "Key 'Description' missing from repo P4::Spec")
-	assert.NotEmpty(s.T(), repo["Options"], "Key 'Options' missing from repo P4::Spec")
-	assert.NotEmpty(s.T(), repo["GconnMirrorStatus"], "Key 'GconnMirrorStatus' missing from repo P4::Spec")
-	assert.NotEmpty(s.T(), repo["GconnMirrorHideFetchUrl"], "Key 'GconnMirrorHideFetchUrl' missing from repo P4::Spec")
+
+	assert.Equal(s.T(), repo["Repo"], "//GD1/pizza", "Key 'Repo' has unexpected value in repo P4::Spec")
+	assert.Equal(s.T(), repo["Owner"], "test", "Key 'Owner' has unexpected value in repo P4::Spec")
+	assert.Equal(s.T(), repo["Created"], "2024/12/18 14:57:16", "Key 'Created' has unexpected value in repo P4::Spec")
+	assert.NotEmpty(s.T(), repo["Description"], "Key 'Description' has unexpected value in repo P4::Spec")
+	assert.Equal(s.T(), repo["Options"], "lfs", "Key 'Options' has unexpected value in repo P4::Spec")
+	assert.Equal(s.T(), repo["GconnMirrorStatus"], "disabled", "Key 'GconnMirrorStatus' has unexpected value in repo P4::Spec")
+	assert.Equal(s.T(), repo["GconnMirrorHideFetchUrl"], "false", "Key 'GconnMirrorHideFetchUrl' has unexpected value in repo P4::Spec")
 
 	// HotFiles
 	hotfiles, err := s.p4api.ParseSpec("hotfiles", HOTFILESSPEC)
 	if err != nil {
 		s.T().Fatalf("Failed to parse hotfiles spec: %v", err)
 	}
-	assert.NotEmpty(s.T(), hotfiles["HotFiles0"], "Key 'HotFiles' missing from hotfiles P4::Spec")
+
+	assert.Equal(s.T(), hotfiles["HotFiles"], []string{"//depot/project1/...", "//depot/project2/... text"}, "Key 'HotFiles' has unexpected value in hotfiles P4::Spec")
 
 	ret, err := s.p4api.Disconnect()
 	assert.True(s.T(), ret, "should disconnect")
@@ -1929,13 +1947,13 @@ func (s *PerforceTestSuite) TestShelve() {
 	require.Len(s.T(), results, 0, "Shouldn't have any open files")
 
 	// Unshelve it again
-	_, _ = s.p4api.Run("unshelve", "-s", changeNum, "-f")
+	_, _ = s.p4api.Run("unshelve", "-s", changeNum.(string), "-f")
 	results, err = s.p4api.Run("opened")
 	require.NoError(s.T(), err, "Failed to run 'opened'")
 	require.Len(s.T(), results, 3, "None or not all files unshelved")
 
 	// And delete the shelve
-	_, _ = s.p4api.Run("shelve", "-d", changeNum)
+	_, _ = s.p4api.Run("shelve", "-d", changeNum.(string))
 	_, _ = s.p4api.Run("revert", "test_files/...")
 
 	ret, err := s.p4api.Disconnect()
@@ -1996,17 +2014,19 @@ func (s *PerforceTestSuite) TestStream() {
 		// an 'extraTag' field (such as 'firmerThanParent' exists, and save
 		// the spec
 		streamSpec, _ := s.p4api.RunFetch("stream", "//Stream/MAIN")
-		streamSpec["Paths0"] = "share ... ## Inline comment"
-		streamSpec["Paths1"] = "## Newline comment"
+		streamSpec["Paths"] = []string{"share ... ## Inline comment", "## Newline comment"}
 		// assert.Contains(s.T(), streamSpec, "firmerThanParent", "'extraTag' field missing from spec.")
 		streamSpec["Type"] = "mainline"
 		msg, _ := s.p4api.RunSave("stream", streamSpec)
 
 		assert.Contains(s.T(), msg.String(), "saved", "Failed to create a stream")
 		nstreamSpec, _ := s.p4api.RunFetch("stream", "//Stream/MAIN")
-		assert.Equal(s.T(), "share ...", nstreamSpec["Paths0"])
-		assert.Equal(s.T(), "## Inline comment", nstreamSpec["PathsComment0"])
-		assert.Equal(s.T(), "## Newline comment", nstreamSpec["PathsComment2"])
+		// After save and fetch, Paths should be an array
+		paths, ok := nstreamSpec["Paths"].([]string)
+		require.True(s.T(), ok, "Paths should be a []string array")
+		require.GreaterOrEqual(s.T(), len(paths), 1, "Should have at least 1 path entry")
+		assert.Equal(s.T(), "share ... ## Inline comment", paths[0])
+		assert.Equal(s.T(), "## Newline comment", paths[1])
 
 	} else {
 		fmt.Println("\tTest Skipped: Streams requires a 2011.1 or later Perforce Server and P4API.")
@@ -2059,9 +2079,16 @@ func (s *PerforceTestSuite) TestSpecIterator() {
 
 	// 1. Create a branch
 	branchSpec, _ := s.p4api.RunFetch("branch", "test_branch")
-	branchSpec["View0"] = "//depot/A/... //depot/A/..."
+	branchSpec["View"] = []string{"//depot/src/... //depot/target/... ## Inline comment", "## Newline comment"}
 	_, err = s.p4api.RunSave("branch", branchSpec)
 	require.NoError(s.T(), err, "Failed to save branch")
+
+	fetchedBranch, _ := s.p4api.RunFetch("branch", "test_branch")
+	views, ok := fetchedBranch["View"].([]string)
+	require.True(s.T(), ok, "View should be a []string array")
+	require.GreaterOrEqual(s.T(), len(views), 1, "Should have at least 1 view entry")
+	assert.Equal(s.T(), "//depot/src/... //depot/target/... ## Inline comment", views[0])
+	assert.Equal(s.T(), "## Newline comment", views[1])
 
 	// 2. Create a changelist
 	changelist, err := s.p4api.RunFetch("change")
@@ -2091,7 +2118,7 @@ func (s *PerforceTestSuite) TestSpecIterator() {
 
 	// 5. Create a group
 	groupSpec, _ := s.p4api.RunFetch("group", "TestGroup")
-	groupSpec["Users0"] = "user1"
+	groupSpec["Users"] = []string{"user1"}
 	_, err = s.p4api.RunSave("group", groupSpec)
 	require.NoError(s.T(), err, "Failed to save group")
 
@@ -2151,8 +2178,7 @@ func (s *PerforceTestSuite) TestSpecIterator() {
 	_, err = s.p4api.RunSave("depot", depotspec)
 	require.NoError(s.T(), err, "Failed to save stream depot")
 	streamSpec, _ := s.p4api.RunFetch("stream", "//Stream/MAIN")
-	streamSpec["Paths0"] = "share ... ## Inline comment"
-	streamSpec["Paths1"] = "## Newline comment"
+	streamSpec["Paths"] = []string{"share ... ## Inline comment", "## Newline comment"}
 	streamSpec["Type"] = "mainline"
 	_, err = s.p4api.RunSave("stream", streamSpec)
 	require.NoError(s.T(), err, "Failed to save stream")
@@ -2208,7 +2234,7 @@ func (s *PerforceTestSuite) TestSpecIterator() {
 	changeSpec["Description"] = "Add some test files\n"
 
 	_, err = s.p4api.RunSubmit(changeSpec)
-	assert.ErrorIs(s.T(), nil, err, "Failed to submit test")
+	assert.NoError(s.T(), err, "Failed to submit test")
 
 	_, _ = s.p4api.Run("attribute", "-f", "-n", "test_tag_4", "-v", "set", "//depot/testfile.txt")
 
@@ -2504,9 +2530,16 @@ func (s *PerforceTestSuite) TestEvilTwin() {
 
 	// Branching
 	branchSpec, _ := s.p4api.RunFetch("branch", "-o", "evil-twin-test")
-	branchSpec["View0"] = "//depot/A/... //depot/B/..."
+	branchSpec["View"] = []string{"//depot/A/... //depot/B/... ## Inline comment", "## Newline comment"}
 	_, err = s.p4api.RunSave("branch", branchSpec)
 	assert.NoError(s.T(), err, "Failed to save branch")
+	fetchedBranch, _ := s.p4api.RunFetch("branch", "evil-twin-test")
+	views, ok := fetchedBranch["View"].([]string)
+	require.True(s.T(), ok, "View should be a []string array")
+	require.GreaterOrEqual(s.T(), len(views), 1, "Should have at least 1 view entry")
+	assert.Equal(s.T(), "//depot/A/... //depot/B/... ## Inline comment", views[0])
+	assert.Equal(s.T(), "## Newline comment", views[1])
+
 	_, _ = s.p4api.Run("integ", "-b", "evil-twin-test")
 	_, err = s.p4api.RunSubmit("-d", "integrating")
 	assert.NoError(s.T(), err, "Failed to submit")
@@ -2802,13 +2835,21 @@ func (op *SyncOutput) HandleSpec(data Dictionary) P4OutputHandlerResult {
 }
 
 func (op *SyncOutput) HandleStat(dict Dictionary) P4OutputHandlerResult {
-	if totalFileCount, err := strconv.Atoi(dict["totalFileCount"]); err == nil {
-		op.totalFiles = append(op.totalFiles, totalFileCount)
+	if totalFileCountStr, ok := dict["totalFileCount"].(string); ok {
+		if totalFileCount, err := strconv.Atoi(totalFileCountStr); err == nil {
+			op.totalFiles = append(op.totalFiles, totalFileCount)
+		} else {
+			op.totalFiles = append(op.totalFiles, 0)
+		}
 	} else {
 		op.totalFiles = append(op.totalFiles, 0)
 	}
-	if size, err := strconv.Atoi(dict["totalFileSize"]); err == nil {
-		op.totalSizes = append(op.totalSizes, size)
+	if sizeStr, ok := dict["totalFileSize"].(string); ok {
+		if size, err := strconv.Atoi(sizeStr); err == nil {
+			op.totalSizes = append(op.totalSizes, size)
+		} else {
+			op.totalSizes = append(op.totalSizes, 0)
+		}
 	} else {
 		op.totalSizes = append(op.totalSizes, 0)
 	}
@@ -2984,12 +3025,10 @@ func (s *PerforceTestSuite) setupTrust() (string, func()) {
 			require.NoError(s.T(), err, "Failed to kill p4d")
 
 			// wait for the process to exit
-			err = cmd.Wait()
-			if err != nil {
-				if !strings.Contains(err.Error(), "signal: killed") {
-					require.NoError(s.T(), err, "Error in process to exit")
-				}
-			}
+			// Note: After Kill(), Wait() may return a non-nil error on some platforms
+			// (e.g., "signal: killed" on Unix, or an exit status on Windows). This is
+			// expected and should not fail the test. We therefore ignore any error here.
+			_ = cmd.Wait()
 		}
 		os.RemoveAll(s.serverRoot)
 	}
@@ -3077,11 +3116,15 @@ func (s *PerforceTestSuite) SSOSetup() {
 	// verify that we get a "you need to accept" when connecting
 	triggersSpec, _ := s.p4api.RunFetch("triggers")
 	assert.Empty(s.T(), triggersSpec, "Triggers should be empty")
-	triggersSpec["Triggers0"] = "loginsso auth-check-sso auth pass"
+	triggersSpec["Triggers"] = []string{"loginsso auth-check-sso auth pass"}
 	msg, _ := s.p4api.RunSave("triggers", triggersSpec)
 	assert.Equal(s.T(), "Triggers saved.", msg.String(), "Failed to save triggers")
 	fetchedTriggersSpec, _ := s.p4api.RunFetch("triggers")
-	assert.Equal(s.T(), triggersSpec, fetchedTriggersSpec)
+	// Verify the trigger was saved correctly
+	triggers, ok := fetchedTriggersSpec["Triggers"].([]string)
+	require.True(s.T(), ok, "Triggers should be a []string array")
+	require.Len(s.T(), triggers, 1, "Should have 1 trigger")
+	assert.Equal(s.T(), "loginsso auth-check-sso auth pass", triggers[0])
 
 	// Set the log so we dont flood stderr
 	res, _ := s.p4api.Run("configure", "set", "P4LOG=log")
