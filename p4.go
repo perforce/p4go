@@ -219,6 +219,7 @@ func (p4 *P4) Close() {
 		C.FreeResolveHandler(p4.resolvehandle)
 	}
 	C.FreeClientApi(p4.handle)
+	p4.handle = nil
 }
 
 func (p4 *P4) Identify() string {
@@ -235,6 +236,9 @@ func (p4 *P4) Connect() (bool, error) {
 }
 
 func (p4 *P4) Connected() bool {
+	if p4.handle == nil {
+		return false
+	}
 	return C.P4Connected(p4.handle) != 0
 }
 
@@ -323,6 +327,16 @@ func (p4 *P4) Run(cmd string, args ...string) ([]P4Result, error) {
 
 			default:
 				// Unknown result?
+			}
+		}
+	}
+
+	// Check if any P4Message results have FAILED or FATAL severity
+	// and promote them to the error return value
+	for _, r := range results {
+		if msg, ok := r.(P4Message); ok {
+			if msg.Severity() == P4MESSAGE_FAILED || msg.Severity() == P4MESSAGE_FATAL {
+				run_err = errors.Join(run_err, msg)
 			}
 		}
 	}

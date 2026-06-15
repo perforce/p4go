@@ -44,7 +44,7 @@ const char*
 P4Identify( P4GoClientApi* api )
 {
     StrBuf s( "P4GoClientApi " );
-    s << "2025.2"; // ToDo: Drive this off the cgo args?
+    s << "2026.1"; // ToDo: Drive this off the cgo args?
     s << " P4API " << api->GetBuild();
     char* ret = (char*)malloc( s.Length() + 1 );
     strcpy( ret, s.Text() );

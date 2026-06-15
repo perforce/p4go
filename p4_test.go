@@ -32,6 +32,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	osuser "os/user"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -157,6 +158,7 @@ func (s *PerforceTestSuite) SetupTest() {
 	os.Unsetenv("PWD")
 
 	s.initClient()
+	s.bootstrapSuperUser()
 	s.Require().NoError(err, "Failed to initialize client")
 
 }
@@ -281,6 +283,57 @@ func (s *PerforceTestSuite) initClient() {
 }
 
 // Need to add fetch client function in the source code
+func (s *PerforceTestSuite) bootstrapSuperUser() {
+	// On p4d 2026.1+ with Secure By Default (SBD), password authentication is
+	// enforced from the very first connection. The only unauthenticated operation
+	// allowed on a fresh server is p4 passwd (no old password) to set the initial
+	// superuser password. Login immediately after so a ticket is cached in the
+	// default ticket file for all subsequent test connections to use.
+	const sbdPass = "P4Go!Super1"
+
+	// Use the system user (not env vars). In RSH mode p4d auto-creates this
+	// user's record, allowing the initial password to be set without prior auth.
+	cur, err := osuser.Current()
+	if err != nil {
+		s.T().Logf("Note: bootstrapSuperUser get OS user: %v", err)
+		return
+	}
+	superUser := cur.Username
+
+	p4 := New()
+	_, _ = p4.SetCharset("none")
+	p4.SetPort(s.p4Port)
+	p4.SetUser(superUser)
+	if _, err := p4.Connect(); err != nil {
+		s.T().Logf("Note: bootstrapSuperUser connect: %v", err)
+		p4.Close()
+		return
+	}
+	defer p4.Close()
+	defer p4.Disconnect()
+
+	// On older p4d the user record must exist before a password can be set.
+	// On 2026.1+ SBD this block fails silently (server rejects all commands
+	// until password is set) — that is expected and harmless.
+	if userSpec, fetchErr := p4.RunFetch("user", superUser); fetchErr == nil {
+		_, _ = p4.RunSave("user", userSpec, "-f")
+	}
+
+	p4.SetInput(sbdPass, sbdPass)
+	if _, err := p4.Run("password"); err != nil {
+		// Password may already be set (e.g. leftover db from a prior run).
+		// Fall through and attempt login with sbdPass anyway.
+		s.T().Logf("Note: bootstrapSuperUser set password (continuing): %v", err)
+	}
+	p4.SetPassword(sbdPass)
+	if _, err := p4.RunLogin(); err != nil {
+		s.T().Logf("Note: bootstrapSuperUser login: %v", err)
+		return
+	}
+	s.p4api.SetUser(superUser)
+	s.p4api.SetPassword(sbdPass)
+}
+
 func (s *PerforceTestSuite) createClient() {
 	// s.p4api = New()
 	s.p4api.SetPort(s.p4Port)
@@ -430,9 +483,6 @@ func (s *PerforceTestSuite) sanitizeName(name string) string {
 }
 
 func (s *PerforceTestSuite) TestInfo() {
-	s.p4api = New()
-	assert.NotNil(s.T(), s.p4api, "Failed to create Perforce client")
-
 	s.p4api.SetPort(s.p4Port)
 	ret, err := s.p4api.Connect()
 	assert.True(s.T(), ret, "Failed to connect to Perforce server")
@@ -1173,38 +1223,53 @@ func (s *PerforceTestSuite) TestPassword() {
 		_, err := s.p4api.Connect()
 		assert.Nil(s.T(), err, "Failed to connect to Perforce server")
 	}
-	s.p4api.SetUser("test_user")
+
+	// Ticket file was swapped to an empty file; re-login so authenticated commands work.
+	_, err = s.p4api.RunLogin()
+	assert.Nil(s.T(), err, "Failed to re-login after ticket file swap")
+
+	const testPass = "P4Go!Test99"
+
+	// Create users and set initial passwords as superuser (security=4 requires strong passwords).
 	userSpecs, _ := s.p4api.RunFetch("user", "test_user")
-	msg, _ := s.p4api.RunPassword("", "foo")
-	assert.Equal(s.T(), "Password updated.", msg.String(), "Password not updated")
-	s.p4api.SetPassword("foo")
-	assert.Equal(s.T(), s.p4api.Password(), "foo", "Password not set correctly")
+	_, err = s.p4api.RunSave("user", userSpecs, "-f")
+	assert.Nil(s.T(), err, "Failed to create test_user")
+	s.p4api.SetInput(testPass, testPass)
+	_, err = s.p4api.Run("passwd", "test_user")
+	assert.Nil(s.T(), err, "Failed to set initial password for test_user")
+	_, err = s.p4api.RunSave("user", userSpecs, "-f")
+	assert.Nil(s.T(), err, "Failed to clear password-reset flag for test_user")
+
+	fooBarSpecs, _ := s.p4api.RunFetch("user", "foo:bar")
+	_, err = s.p4api.RunSave("user", fooBarSpecs, "-f")
+	assert.Nil(s.T(), err, "Failed to create foo:bar user")
+	s.p4api.SetInput(testPass, testPass)
+	_, err = s.p4api.Run("passwd", "foo:bar")
+	assert.Nil(s.T(), err, "Failed to set initial password for foo:bar")
+	_, err = s.p4api.RunSave("user", fooBarSpecs, "-f")
+	assert.Nil(s.T(), err, "Failed to clear password-reset flag for foo:bar")
+
+	s.p4api.SetUser("test_user")
+	s.p4api.SetPassword(testPass)
+	assert.Equal(s.T(), s.p4api.Password(), testPass, "Password not set correctly")
 	res, _ := s.p4api.RunLogin()
 	assert.IsType(s.T(), Dictionary{}, res, "Login failed")
-	//  Note: p4.password is set by the login above to the ticket.
-	msg, _ = s.p4api.RunPassword("foo", "")
-	assert.Equal(s.T(), "Password deleted.", msg.String(), "Password not updated")
+	userSpecs, _ = s.p4api.RunFetch("user", "test_user")
+	msg, _ := s.p4api.RunPassword(testPass, testPass+"b")
+	assert.Equal(s.T(), "Password updated.", msg.String(), "Password not updated")
 
 	oldUser := userSpecs["User"]
 
 	// Ensure that ticket file is correctly parsed for user names that contain a ':'.
 	s.p4api.SetUser("foo:bar")
-	userSpecs, _ = s.p4api.RunFetch("user", "foo:bar")
-	_, err = s.p4api.RunSave("user", userSpecs)
-	assert.Nil(s.T(), err, "Failed to save user spec")
-
-	msg, _ = s.p4api.RunPassword("", "foo")
-	assert.Equal(s.T(), "Password updated.", msg.String(), "Password not updated")
-
-	s.p4api.SetPassword("foo")
-	assert.Equal(s.T(), s.p4api.Password(), "foo", "Password not set correctly")
-
+	s.p4api.SetPassword(testPass)
+	assert.Equal(s.T(), s.p4api.Password(), testPass, "Password not set correctly")
 	res, _ = s.p4api.RunLogin()
 	assert.IsType(s.T(), Dictionary{}, res, "Login failed")
-
-	//  Note: p4.password is set by the login above to the ticket.
-	msg, _ = s.p4api.RunPassword("foo", "")
-	assert.Equal(s.T(), "Password deleted.", msg.String(), "Password not updated")
+	_, err = s.p4api.RunSave("user", fooBarSpecs)
+	assert.Nil(s.T(), err, "Failed to save user spec")
+	msg, _ = s.p4api.RunPassword(testPass, testPass+"b")
+	assert.Equal(s.T(), "Password updated.", msg.String(), "Password not updated")
 
 	_, err = os.Stat(s.p4api.TicketFile())
 	require.False(s.T(), os.IsNotExist(err), "Ticket file not created")
@@ -1212,7 +1277,7 @@ func (s *PerforceTestSuite) TestPassword() {
 	s.p4api.SetUser(oldUser.(string))
 
 	allticket, _ := s.p4api.RunTickets()
-	require.Len(s.T(), allticket, 2, "Unexpected number of tickets found.")
+	require.Len(s.T(), allticket, 3, "Unexpected number of tickets found.")
 
 	for _, ticket := range allticket {
 		assert.IsType(s.T(), map[string]string{}, ticket, "Ticket entry is not a map object")
@@ -2104,16 +2169,34 @@ func (s *PerforceTestSuite) TestSpecIterator() {
 	_, err = s.p4api.RunSave("job", jobSpec)
 	require.NoError(s.T(), err, "Failed to save job")
 
-	// 4. Create a user
-	s.p4api.SetUser("test_user")
-	user, err := s.p4api.RunFetch("user")
+	// 4. Create a user with password set as superuser (security=4 requirement).
+	const testIterPass = "P4Go!Test99"
+	user, err := s.p4api.RunFetch("user", "test_user")
 	require.NoError(s.T(), err)
 	user["FullName"] = "Test User"
 	user["Email"] = "test_user@example.com"
-	_, err = s.p4api.RunSave("user", user)
+	_, err = s.p4api.RunSave("user", user, "-f")
 	require.NoError(s.T(), err, "Failed to save user")
+	s.p4api.SetInput(testIterPass, testIterPass)
+	_, err = s.p4api.Run("passwd", "test_user")
+	require.NoError(s.T(), err, "Failed to set initial password for test_user")
+	_, err = s.p4api.RunSave("user", user, "-f")
+	require.NoError(s.T(), err, "Failed to clear password-reset flag for test_user")
 
-	_, err = s.p4api.RunLogin("test_user")
+	// Login as test_user via a separate connection. Changing the user on a live
+	// P4API connection does not reset the session-level auth state at security=4;
+	// a fresh connection ensures test_user authenticates cleanly. The resulting
+	// ticket is written to the default ticket file alongside the superuser ticket.
+	p4test := New()
+	_, _ = p4test.SetCharset("none")
+	p4test.SetPort(s.p4Port)
+	p4test.SetUser("test_user")
+	p4test.SetPassword(testIterPass)
+	_, err = p4test.Connect()
+	require.NoError(s.T(), err, "Failed to connect as test_user")
+	defer p4test.Close()
+	defer p4test.Disconnect()
+	_, err = p4test.RunLogin()
 	require.NoError(s.T(), err, "Failed to login as test_user")
 
 	// 5. Create a group
@@ -3161,6 +3244,49 @@ func (s *PerforceTestSuite) SSOTestDefault() {
 
 func (s *PerforceTestSuite) TestSSO() {
 	s.SSOSetup()
+}
+
+func (s *PerforceTestSuite) TestRunErrorReturn() {
+	// Test for P4GO-66: Verify that FAILED/FATAL messages are returned as errors
+	// not just in the results array
+	s.p4api = New()
+	assert.NotNil(s.T(), s.p4api, "Failed to create Perforce client")
+
+	s.p4api.SetPort(s.p4Port)
+	ret, err := s.p4api.Connect()
+	assert.True(s.T(), ret, "Failed to connect to Perforce server")
+	assert.Nil(s.T(), err, "Failed to connect to Perforce server")
+
+	// Run a command that will fail - trying to sync a non-existent depot path
+	// This should return a FAILED message
+	results, err := s.p4api.Run("sync", "//non_existent_depot/non_existent_file.txt")
+
+	// Verify that the error is returned as an actual error, not nil
+	// This is the fix for P4GO-66 - before the fix, err would be nil
+	// and the error would only be in the results array
+	assert.Error(s.T(), err, "Expected error to be non-nil for failed command")
+
+	// Verify that results still contain the message for backward compatibility
+	assert.NotEmpty(s.T(), results, "Results should still contain the error message")
+
+	// Verify that at least one result is a P4Message with FAILED or FATAL severity
+	foundFailedMessage := false
+	for _, r := range results {
+		if msg, ok := r.(P4Message); ok {
+			if msg.Severity() == P4MESSAGE_FAILED || msg.Severity() == P4MESSAGE_FATAL {
+				foundFailedMessage = true
+				// Verify the error message is part of the joined error
+				assert.Contains(s.T(), err.Error(), msg.String(), "Error should contain the message text")
+				break
+			}
+		}
+	}
+	assert.True(s.T(), foundFailedMessage, "Should have at least one FAILED or FATAL message in results")
+
+	ret, err = s.p4api.Disconnect()
+	assert.True(s.T(), ret, "should disconnect")
+	assert.Nil(s.T(), err, "should disconnect")
+	s.p4api.Close()
 }
 
 func TestPerforceTestSuite(t *testing.T) {

@@ -1,7 +1,7 @@
                            Release Notes for
                        P4Go, P4 API for Golang
 
-                            Version 2025.2
+                            Version 2026.1
 
 Introduction
 
@@ -45,26 +45,26 @@ Compatibility Statements
 
     Server Compatibility
 
-      This release of P4Go supports the 2025.2 P4 Server.
+      This release of P4Go supports the 2026.1 P4 Server.
       Older releases might work but are not supported.
 
     API Compatibility
 
-      This release of P4Go supports the 2025.2 P4 C/C++ API
-      (2025.2/2852709). Older releases might work but are not supported.
+      This release of P4Go supports the 2026.1 P4 C/C++ API
+      (2026.1/2951233). Older releases might work but are not supported.
 
     Golang Compatibility
 
-      This release of P4Go supports the Go 1.24.x. 
+      This release of P4Go supports the Go 1.26.x. 
       Older releases might work but are not supported.
 
     OpenSSL Compatibility
-    
-      To build P4Go application with encrypted communication support, 
-      you must use the version of OpenSSL that P4 C/C++ API has 
+
+      To build P4Go application with encrypted communication support,
+      you must use the version of OpenSSL that P4 C/C++ API has
       been built against.
 
-      Executables linked against the P4 C/C++ API libraries must also be linked against 
+      Executables linked against the P4 C/C++ API libraries must also be linked against
       real OpenSSL libraries: The latest OpenSSL version 3 is recommended
 
     Platform Compatibility
@@ -73,7 +73,7 @@ Compatibility Statements
       only on the following platforms:
 
         Windows for Intel(x64)
-            Server 2022
+            Server 2022, 2025
         Linux kernel 2.6+ for Intel(x86_64)
             Ubuntu 22.04, 24.04
             RockyLinux 9, 10
@@ -108,6 +108,26 @@ Compatibility Statements
       script APIs (P4Perl, P4Ruby, P4Go etc.) should ensure that a
       separate connection is used for each thread or that only one
       thread may use a shared connection at a time.
+
+--------------------------------------------------------------------------
+
+New functionalities in 2026.1 (2026.1/2974624) (2026/06/11)
+
+    #2948839 (Job #133658) * ** ***
+        This release of P4Go supports the 2026.1 P4 C/C++ API
+
+    #2945314 (Job #130559)
+        Added support for Go 1.26
+
+    (Job #128777)
+        Added support for Windows Server 2025
+
+Bugs fixed in 2026.1
+
+    #2942757 (Job #129979)
+        Fixed incorrect nil error returns when command execution encounters FAILED or
+        FATAL messages. P4Message results with FAILED or FATAL severity are now
+        properly promoted to the error return value for correct error handling.
 
 --------------------------------------------------------------------------
 
