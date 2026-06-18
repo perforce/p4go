@@ -15,16 +15,16 @@ P4Go is a Go module that provides an API to P4 Server. Using P4Go is faster than
 
 ## Requirements
 
-Go 1.24
+Go 1.26
 
 The P4API relevant to your platform:
-* Linux x86_64 - http://ftp.perforce.com/perforce/r25.2/bin.linux26x86_64/p4api-glibc2.12-openssl3.tgz
-* Linux aarch64 - http://ftp.perforce.com/perforce/r25.2/bin.linux26aarch64/p4api-openssl3.tgz
-* MacOS - https://ftp.perforce.com/perforce/r25.2/bin.macosx12u/p4api-openssl3.tgz
-* Windows - https://ftp.perforce.com/perforce/r25.2/bin.mingw64x64/p4api-openssl3_gcc8_win32_seh.zip
-* Windows - https://ftp.perforce.com/perforce/r25.2/bin.mingw64x64/p4api-openssl3_gcc8_win32_sjlj.zip
-* Windows - https://ftp.perforce.com/perforce/r25.2/bin.mingw64x64/p4api-openssl3_gcc8_posix_seh.zip
-* Windows - https://ftp.perforce.com/perforce/r25.2/bin.mingw64x64/p4api-openssl3_gcc8_posix_sjlj.zip
+* Linux x86_64 - http://ftp.perforce.com/perforce/r26.1/bin.linux26x86_64/p4api-glibc2.12-openssl3.tgz
+* Linux aarch64 - http://ftp.perforce.com/perforce/r26.1/bin.linux26aarch64/p4api-openssl3.tgz
+* MacOS - https://ftp.perforce.com/perforce/r26.1/bin.macosx12u/p4api-openssl3.tgz
+* Windows - https://ftp.perforce.com/perforce/r26.1/bin.mingw64x64/p4api-openssl3_gcc8_win32_seh.zip
+* Windows - https://ftp.perforce.com/perforce/r26.1/bin.mingw64x64/p4api-openssl3_gcc8_win32_sjlj.zip
+* Windows - https://ftp.perforce.com/perforce/r26.1/bin.mingw64x64/p4api-openssl3_gcc8_posix_seh.zip
+* Windows - https://ftp.perforce.com/perforce/r26.1/bin.mingw64x64/p4api-openssl3_gcc8_posix_sjlj.zip
 
 OpenSSL 3
 * On Linux, this is typically the libssl-dev package

@@ -111,6 +111,17 @@ Compatibility Statements
 
 --------------------------------------------------------------------------
 
+Bugs fixed in 2026.1 Patch 1 (2026.1/2982500) (2026/06/17)
+
+    #2981339 (Job #134671)
+        Fixed an issue where clearing the resolve handler 
+        followed by Close() caused a SIGABRT due to a double-free.
+    
+    #2977791 (Job #134674)
+        The documentation URL in the README.md file has been corrected.
+
+--------------------------------------------------------------------------
+
 New functionalities in 2026.1 (2026.1/2974624) (2026/06/11)
 
     #2948839 (Job #133658) * ** ***

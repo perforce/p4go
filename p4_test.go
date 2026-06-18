@@ -3289,6 +3289,21 @@ func (s *PerforceTestSuite) TestRunErrorReturn() {
 	s.p4api.Close()
 }
 
+type minimalResolveHandler struct{}
+
+func (m *minimalResolveHandler) Resolve(md P4MergeData) P4MergeStatus {
+	return P4MD_QUIT
+}
+
+func (s *PerforceTestSuite) TestResolveHandlerClearThenClose() {
+	p4 := New()
+	require.NotNil(s.T(), p4, "New() should return a valid P4 instance")
+	handler := &minimalResolveHandler{}
+	p4.SetResolveHandler(handler)
+	p4.SetResolveHandler(nil)
+	p4.Close()
+}
+
 func TestPerforceTestSuite(t *testing.T) {
 	suite.Run(t, new(PerforceTestSuite))
 }

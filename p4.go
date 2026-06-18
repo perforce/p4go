@@ -1692,7 +1692,7 @@ func (p4 *P4) SetResolveHandler(handler P4ResolveHandler) {
 		resolvehandler_pointer_map.Delete(p)
 		C.FreeResolveHandler(p)
 	}
-	p4.outputhandle = nil
+	p4.resolvehandle = nil
 	if handler != nil {
 		p4.resolvehandle = C.NewResolveHandler()
 		resolvehandler_pointer_map.Set(p4.resolvehandle, &handler)
