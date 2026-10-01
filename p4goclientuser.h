@@ -122,6 +122,7 @@ class P4GoClientUser
 
     // Client User methods overridden here
     void OutputText( const char* data, int length );
+    void OutputInfo( char level, const char* data );
     void Message( Error* e );
     void OutputStat( StrDict* values );
     void OutputBinary( const char* data, int length );

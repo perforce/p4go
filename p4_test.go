@@ -608,6 +608,32 @@ func (s *PerforceTestSuite) TestClient() {
 	s.p4api.Close()
 }
 
+func (s *PerforceTestSuite) TestUntaggedSpecForm() {
+	assert.NotNil(s.T(), s.p4api, "Failed to create Perforce client")
+	if !s.p4api.Connected() {
+		_, err := s.p4api.Connect()
+		require.Nil(s.T(), err, "Failed to connect to Perforce server")
+	}
+
+	s.p4api.SetTagged(false)
+	res, err := s.p4api.Run("client", "-o")
+	require.Nil(s.T(), err, "client -o failed")
+
+	var form strings.Builder
+	for _, r := range res {
+		if d, ok := r.(P4Data); ok {
+			form.WriteString(string(d))
+		}
+	}
+	assert.Contains(s.T(), form.String(), "\nClient:\t"+s.p4api.Client()+"\n",
+		"untagged client form missing from results: OutputInfo output went to stdout instead")
+
+	ret, err := s.p4api.Disconnect()
+	assert.True(s.T(), ret, "should disconnect")
+	assert.Nil(s.T(), err, "should disconnect")
+	s.p4api.Close()
+}
+
 func (s *PerforceTestSuite) TestFiles() {
 	assert.NotNil(s.T(), s.p4api, "Failed to create Perforce client")
 	if !s.p4api.Connected() {

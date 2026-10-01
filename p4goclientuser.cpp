@@ -421,6 +421,23 @@ P4GoClientUser::OutputText( const char* data, int length )
 }
 
 void
+P4GoClientUser::OutputInfo( char level, const char* data )
+{
+    if( P4GODB_CALLS )
+        fprintf( stderr, "[P4] OutputInfo()\n" );
+
+    StrBuf line;
+    switch( level ) {
+    case '1': line.Append( "... " ); break;
+    case '2': line.Append( "... ... " ); break;
+    default: break;
+    }
+    line.Append( data );
+    line.Append( "\n" );
+    ProcessOutput( line, false );
+}
+
+void
 P4GoClientUser::Message( Error* e )
 {
     if( P4GODB_CALLS )
