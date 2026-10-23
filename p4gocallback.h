@@ -37,6 +37,9 @@ void
 cbProgressDone( void* progress, int fail );
 
 int
+cbIsAlive( void* keepAlive );
+
+int
 cbHandleBinary( void* handler, char* d, int len );
 int
 cbHandleMessage( void* handler, Error* e );
@@ -54,3 +57,18 @@ cbSSOAuthorize( void* handler, StrDict* d, int l, char** r );
 
 int
 cbResolve( void* handler, P4GoMergeData* m );
+
+void
+cbFbRelease( void* handler );
+void
+cbFbOpen( void* handler, char *path, int mode, Error *e );
+void
+cbFbWrite( void* handler, char *buf, int len, Error *e );
+int
+cbFbRead( void* handler, char *buf, int len, Error *e );
+void
+cbFbClose( void* handler, Error *e );
+void
+cbFbSeek( void* handler, long long offset, Error* e );
+void
+cbFbSizeHint( void* handler, long long size );

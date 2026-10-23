@@ -29,10 +29,13 @@ package p4
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -95,6 +98,36 @@ func (c *progressPtrMap) Delete(k *C.P4GoProgress) {
 
 var progress_pointer_map = &progressPtrMap{
 	items: make(map[*C.P4GoProgress]*P4Progress),
+}
+
+type keepAlivePtrMap struct {
+	items map[*C.P4GoKeepAlive]*p4KeepAlive
+	sync.RWMutex
+}
+
+func (c *keepAlivePtrMap) Set(k *C.P4GoKeepAlive, v *p4KeepAlive) {
+	c.Lock()
+	defer c.Unlock()
+
+	c.items[k] = v
+}
+
+func (c *keepAlivePtrMap) Get(k *C.P4GoKeepAlive) *p4KeepAlive {
+	c.RLock()
+	defer c.RUnlock()
+
+	return c.items[k]
+}
+
+func (c *keepAlivePtrMap) Delete(k *C.P4GoKeepAlive) {
+	c.Lock()
+	defer c.Unlock()
+
+	delete(c.items, k)
+}
+
+var keepalive_pointer_map = &keepAlivePtrMap{
+	items: make(map[*C.P4GoKeepAlive]*p4KeepAlive),
 }
 
 type handlerPtrMap struct {
@@ -187,36 +220,94 @@ var resolvehandler_pointer_map = &resolveHandlerPtrMap{
 	items: make(map[*C.P4GoResolveHandler]*P4ResolveHandler),
 }
 
+type fbPtrMap struct {
+	items map[*C.P4GoFileSysBuffer]*P4FileBuffer
+	sync.RWMutex
+}
+
+func (c *fbPtrMap) Set(k *C.P4GoFileSysBuffer, v *P4FileBuffer) {
+	c.Lock()
+	defer c.Unlock()
+
+	c.items[k] = v
+}
+
+func (c *fbPtrMap) Get(k *C.P4GoFileSysBuffer) *P4FileBuffer {
+	c.RLock()
+	defer c.RUnlock()
+
+	return c.items[k]
+}
+
+func (c *fbPtrMap) Delete(k *C.P4GoFileSysBuffer) {
+	c.Lock()
+	defer c.Unlock()
+
+	delete(c.items, k)
+}
+
+var fb_pointer_map = &fbPtrMap{
+	items: make(map[*C.P4GoFileSysBuffer]*P4FileBuffer),
+}
+
 type P4 struct {
-	handle         *C.P4GoClientApi
-	progresshandle *C.P4GoProgress
-	outputhandle   *C.P4GoHandler
-	ssohandle      *C.P4GoSSOHandler
-	resolvehandle  *C.P4GoResolveHandler
+	handle          *C.P4GoClientApi
+	progresshandle  *C.P4GoProgress
+	keepalivehandle *C.P4GoKeepAlive
+	keepalive       *p4KeepAlive
+	outputhandle    *C.P4GoHandler
+	ssohandle       *C.P4GoSSOHandler
+	resolvehandle   *C.P4GoResolveHandler
+	fbhandler       *C.P4GoFileSysBuffer
 }
 
 func New() *P4 {
 	p := C.NewClientApi()
-	ret := &P4{handle: p, progresshandle: nil, outputhandle: nil, ssohandle: nil, resolvehandle: nil}
+	ret := &P4{handle: p, progresshandle: nil, keepalivehandle: nil, keepalive: nil, outputhandle: nil, ssohandle: nil, resolvehandle: nil, fbhandler: nil}
 	return ret
 }
 
+// Close releases the C++ objects owned by this P4. It is safe to call more
+// than once: each handle is cleared as it is freed, so a second call is a
+// no-op rather than a double free.
 func (p4 *P4) Close() {
+	if p4.handle == nil {
+		return
+	}
 	if p4.progresshandle != nil {
 		progress_pointer_map.Delete(p4.progresshandle)
 		C.FreeProgress(p4.progresshandle)
+		p4.progresshandle = nil
+	}
+	if p4.keepalivehandle != nil {
+		C.SetKeepAlive(p4.handle, nil)
+		keepalive_pointer_map.Delete(p4.keepalivehandle)
+		C.FreeKeepAlive(p4.keepalivehandle)
+		p4.keepalivehandle = nil
 	}
 	if p4.outputhandle != nil {
 		handler_pointer_map.Delete(p4.outputhandle)
 		C.FreeHandler(p4.outputhandle)
+		p4.outputhandle = nil
 	}
 	if p4.ssohandle != nil {
+		// ClientUser takes ownership of the ClientSSO it is given and
+		// deletes it in ~ClientUser, so detach before freeing ours or
+		// both sides delete the same object.
+		C.SetSSOHandler(p4.handle, nil)
 		ssohandler_pointer_map.Delete(p4.ssohandle)
 		C.FreeSSOHandler(p4.ssohandle)
+		p4.ssohandle = nil
 	}
 	if p4.resolvehandle != nil {
 		resolvehandler_pointer_map.Delete(p4.resolvehandle)
 		C.FreeResolveHandler(p4.resolvehandle)
+		p4.resolvehandle = nil
+	}
+	if p4.fbhandler != nil {
+		fb_pointer_map.Delete(p4.fbhandler)
+		C.FreeFileBuffer(p4.fbhandler)
+		p4.fbhandler = nil
 	}
 	C.FreeClientApi(p4.handle)
 	p4.handle = nil
@@ -224,8 +315,8 @@ func (p4 *P4) Close() {
 
 func (p4 *P4) Identify() string {
 	p := C.P4Identify(p4.handle)
-	ret := C.GoString(p)
-	return ret
+	defer C.free(unsafe.Pointer(p))
+	return C.GoString(p)
 }
 
 func (p4 *P4) Connect() (bool, error) {
@@ -251,6 +342,34 @@ func (p4 *P4) Disconnect() (bool, error) {
 
 type Dictionary map[string]interface{}
 
+func (p4 *P4) RunContext(ctx context.Context, cmd string, args ...string) ([]P4Result, error) {
+	if ctx == nil {
+		return nil, errors.New("nil context")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	k := p4.breakState()
+	k.ctx = ctx
+	k.ctxStopped = false
+	p4.applyBreak()
+	defer func() {
+		k.ctx = nil
+		k.ctxStopped = false
+		p4.applyBreak()
+	}()
+
+	results, err := p4.Run(cmd, args...)
+	if !k.ctxStopped {
+		return results, err
+	}
+	if err == nil {
+		return results, ctx.Err()
+	}
+	return results, errors.Join(err, ctx.Err())
+}
+
 func (p4 *P4) Run(cmd string, args ...string) ([]P4Result, error) {
 	c_cmd := C.CString(cmd)
 
@@ -273,7 +392,7 @@ func (p4 *P4) Run(cmd string, args ...string) ([]P4Result, error) {
 	rcount := int(C.ResultCount(p4.handle))
 	for i := 0; i < rcount; i++ {
 		t := C.int(0)
-		r := (*C.P4GoResult)(C.malloc(C.size_t(1)))
+		var r *C.P4GoResult
 		if C.ResultGet(p4.handle, C.int(i), &t, &r) != 0 {
 			switch P4ResultType(int(t)) {
 			case P4RESULTTYPE_STRING:
@@ -291,15 +410,12 @@ func (p4 *P4) Run(cmd string, args ...string) ([]P4Result, error) {
 				C.free(unsafe.Pointer(s))
 			case P4RESULTTYPE_DICT:
 				j := 0
-				k := (*C.char)(C.malloc(C.size_t(1)))
-				v := (*C.char)(C.malloc(C.size_t(1)))
+				var k, v *C.char
 				d := Dictionary{}
 				for C.ResultGetKeyPair(r, C.int(j), &k, &v) != 0 {
 					j++
 					d[C.GoString(k)] = C.GoString(v)
 				}
-				C.free(unsafe.Pointer(k))
-				C.free(unsafe.Pointer(v))
 				results = append(results, d)
 			case P4RESULTTYPE_SPEC:
 				// Convert spec result using SpecData API to properly handle arrays
@@ -410,6 +526,16 @@ func (p4 *P4) Debug() int {
 
 func (p4 *P4) SetDebug(debugLevel int) {
 	C.SetDebug(p4.handle, C.int(debugLevel))
+}
+
+// setDiscardUnusedOldPasswordSlot is used by RunPassword; see
+// P4GoClientUser::Prompt(Error*, ...) for what it does and why.
+func (p4 *P4) setDiscardUnusedOldPasswordSlot(discard bool) {
+	d := C.int(0)
+	if discard {
+		d = 1
+	}
+	C.SetDiscardUnusedOldPasswordSlot(p4.handle, d)
 }
 
 func (p4 *P4) Charset() string {
@@ -648,6 +774,32 @@ func (p4 *P4) SetInput(input ...string) {
 	}
 }
 
+func (p4 *P4) SetInputBytes(input ...[]byte) error {
+	for i, in := range input {
+		if err := checkInputLength(uint64(len(in))); err != nil {
+			return fmt.Errorf("input %d: %w", i, err)
+		}
+	}
+	for _, in := range input {
+		if len(in) == 0 {
+			C.AppendInputBytes(p4.handle, nil, 0)
+			continue
+		}
+		cIn := C.CBytes(in)
+		C.AppendInputBytes(p4.handle, (*C.char)(cIn), C.uint(len(in)))
+		C.free(cIn)
+	}
+	return nil
+}
+
+func checkInputLength(n uint64) error {
+	const limit = 0x1FFFFFFF
+	if n >= limit {
+		return fmt.Errorf("%d bytes is too large: P4API cannot send messages of %d bytes or more", n, limit)
+	}
+	return nil
+}
+
 // convertSpecDataToDict converts a P4GoSpecData pointer to a Dictionary
 // handling both scalar values and arrays properly
 func convertSpecDataToDict(spec *C.P4GoSpecData) Dictionary {
@@ -682,18 +834,16 @@ func convertSpecDataToDict(spec *C.P4GoSpecData) Dictionary {
 			// Array element: "View[0]" -> base="View"
 			baseKey := key[:idx]
 			baseKeys[baseKey] = append(baseKeys[baseKey], key)
-		} else {
-			// Check if this is a base key that has array elements
-			hasArrayElements := false
-			for fullKey := range rawPairs {
-				if strings.HasPrefix(fullKey, key+"[") {
-					hasArrayElements = true
-					break
-				}
-			}
-			if !hasArrayElements {
-				scalarKeys[key] = rawPairs[key]
-			}
+		}
+	}
+
+	for key, val := range rawPairs {
+		if strings.Contains(key, "[") {
+			continue
+		}
+		// P4API writes an empty base key alongside the elements, so skip it
+		if _, isArray := baseKeys[key]; !isArray {
+			scalarKeys[key] = val
 		}
 	}
 
@@ -1148,11 +1298,14 @@ func (p4 *P4) SpecIterator(spec string, args ...string) ([]Dictionary, error) {
 }
 
 func (p4 *P4) RunPassword(old string, new string) (*P4Message, error) {
-	if len(old) > 0 {
-		p4.SetInput(old, new, new)
-	} else {
-		p4.SetInput(new, new)
-	}
+	// Always queue an old-password answer, even when old is empty: the
+	// server decides whether to actually prompt for it (skipped when the
+	// caller already holds a valid ticket, or no password is set yet).
+	// setDiscardUnusedOldPasswordSlot tells P4GoClientUser to discard
+	// this slot when it isn't asked for, rather than let it be consumed
+	// by the new-password prompt instead.
+	p4.SetInput(old, new, new)
+	p4.setDiscardUnusedOldPasswordSlot(true)
 
 	raw, run_err := p4.Run("password")
 
@@ -1336,6 +1489,9 @@ func (e *P4Message) GetLine(i int) P4MessageLine {
 }
 
 func (e *P4Message) String() string {
+	if e == nil {
+		return ""
+	}
 	var sb strings.Builder
 	for i := 0; i < len(e.lines); i++ {
 		if i != 0 {
@@ -1381,14 +1537,15 @@ func handleCError(call func(e *C.Error) interface{}) (interface{}, error) {
 	defer C.FreeError(e)
 
 	result := call(e)
+	severity := P4MessageSeverity(C.GetErrorSeverity(e))
 
-	if int(C.GetErrorCount(e)) == 0 {
+	if !hasP4Error(severity) {
 		return result, nil // No error occurred
 	}
 
 	// Process the error details
 	err := P4Message{}
-	err.severity = P4MessageSeverity(C.GetErrorSeverity(e))
+	err.severity = severity
 	ec := int(C.GetErrorCount(e))
 	err.lines = []P4MessageLine{}
 	for j := 0; j < ec; j++ {
@@ -1402,6 +1559,10 @@ func handleCError(call func(e *C.Error) interface{}) (interface{}, error) {
 	}
 
 	return result, err // Return nil for the result and the error details
+}
+
+func hasP4Error(severity P4MessageSeverity) bool {
+	return severity != P4MESSAGE_EMPTY
 }
 
 // Callbacks
@@ -1428,6 +1589,60 @@ func (p4 *P4) SetProgress(progress P4Progress) {
 	} else {
 		C.SetProgress(p4.handle, nil)
 	}
+}
+
+type P4KeepAlive interface {
+	IsAlive() bool
+}
+
+type p4KeepAlive struct {
+	user       P4KeepAlive
+	ctx        context.Context
+	ctxStopped bool
+}
+
+func (k *p4KeepAlive) isAlive() bool {
+	if k.ctx != nil && k.ctx.Err() != nil {
+		k.ctxStopped = true
+		return false
+	}
+	return k.user == nil || k.user.IsAlive()
+}
+
+func (p4 *P4) SetBreak(keepAlive P4KeepAlive) {
+	p4.breakState().user = keepAlive
+	p4.applyBreak()
+}
+
+func (p4 *P4) breakState() *p4KeepAlive {
+	if p4.keepalive == nil {
+		p4.keepalive = &p4KeepAlive{}
+	}
+	return p4.keepalive
+}
+
+func (p4 *P4) applyBreak() {
+	k := p4.keepalive
+	if k.user == nil && k.ctx == nil {
+		if p4.keepalivehandle != nil {
+			C.SetKeepAlive(p4.handle, nil)
+		}
+		return
+	}
+	if p4.keepalivehandle == nil {
+		p4.keepalivehandle = C.NewKeepAlive()
+		keepalive_pointer_map.Set(p4.keepalivehandle, k)
+	}
+	C.SetKeepAlive(p4.handle, p4.keepalivehandle)
+}
+
+//export goCallKeepAliveIsAlive
+func goCallKeepAliveIsAlive(ctx unsafe.Pointer) C.int {
+	keepAlive := keepalive_pointer_map.Get((*C.P4GoKeepAlive)(ctx))
+	if keepAlive != nil && !keepAlive.isAlive() {
+		return 0
+	}
+	return 1
 }
 
 //export goCallProgressInitFunction
@@ -1553,14 +1768,11 @@ func goCallHandleStatFunction(ctx unsafe.Pointer, t *C.StrDict) C.int {
 	if handler != nil {
 		dict := Dictionary{}
 		i := 0
-		k := (*C.char)(C.malloc(C.size_t(1)))
-		v := (*C.char)(C.malloc(C.size_t(1)))
+		var k, v *C.char
 		for C.StrDictGetKeyPair(t, C.int(i), &k, &v) != 0 {
 			i++
 			dict[C.GoString(k)] = C.GoString(v)
 		}
-		C.free(unsafe.Pointer(k))
-		C.free(unsafe.Pointer(v))
 		return C.int((*handler).HandleStat(dict))
 	}
 	return C.int(0)
@@ -1572,14 +1784,11 @@ func goCallHandleSpecFunction(ctx unsafe.Pointer, t *C.P4GoSpecData) C.int {
 	if handler != nil {
 		dict := Dictionary{}
 		i := 0
-		k := (*C.char)(C.malloc(C.size_t(1)))
-		v := (*C.char)(C.malloc(C.size_t(1)))
+		var k, v *C.char
 		for C.SpecDataGetKeyPair(t, C.int(i), &k, &v) != 0 {
 			i++
 			dict[C.GoString(k)] = C.GoString(v)
 		}
-		C.free(unsafe.Pointer(k))
-		C.free(unsafe.Pointer(v))
 		return C.int((*handler).HandleSpec(dict))
 	}
 	return C.int(0)
@@ -1655,14 +1864,11 @@ func goCallSSOAuthorizeFunction(ctx unsafe.Pointer, d *C.StrDict, l C.int, r **C
 	if ssohandler != nil {
 		dict := Dictionary{}
 		i := 0
-		k := (*C.char)(C.malloc(C.size_t(1)))
-		v := (*C.char)(C.malloc(C.size_t(1)))
+		var k, v *C.char
 		for C.StrDictGetKeyPair(d, C.int(i), &k, &v) != 0 {
 			i++
 			dict[C.GoString(k)] = C.GoString(v)
 		}
-		C.free(unsafe.Pointer(k))
-		C.free(unsafe.Pointer(v))
 
 		status, ret := (*ssohandler).Authorize(dict, int(l))
 		*r = C.CString(ret)
@@ -1740,6 +1946,10 @@ const (
 
 type P4Map struct {
 	handle *C.MapApi
+	// caseSensitivity only applies once caseSet is true; until then the MapApi
+	// default for the platform is left alone.
+	caseSensitivity P4MapCaseSensitivity
+	caseSet         bool
 }
 
 func NewMap() *P4Map {
@@ -1749,16 +1959,45 @@ func NewMap() *P4Map {
 }
 
 func (mapapi *P4Map) Close() {
+	if mapapi == nil || mapapi.handle == nil {
+		return
+	}
 	C.FreeMapApi(mapapi.handle)
+	mapapi.handle = nil
+}
+
+// SetCaseSensitivity controls whether the map matches paths case sensitively.
+// Until it is called, the MapApi default for the platform applies.
+func (mapapi *P4Map) SetCaseSensitivity(mode P4MapCaseSensitivity) {
+	if mapapi == nil || mapapi.handle == nil {
+		return
+	}
+	if mode != P4MAP_CASE_SENSITIVE && mode != P4MAP_CASE_INSENSITIVE {
+		return
+	}
+	C.MapApiSetCaseSensitivity(mapapi.handle, C.int(mode))
+	mapapi.caseSensitivity = mode
+	mapapi.caseSet = true
 }
 
 func JoinMap(m1 *P4Map, m2 *P4Map) *P4Map {
+	if m1 == nil || m2 == nil || m1.handle == nil || m2.handle == nil {
+		return nil
+	}
 	p := C.JoinMapApi(m1.handle, m2.handle)
 	ret := &P4Map{handle: p}
+	// Join builds a new MapApi, so carry the case sensitivity over when both
+	// inputs were explicitly set to the same mode.
+	if m1.caseSet && m2.caseSet && m1.caseSensitivity == m2.caseSensitivity {
+		ret.SetCaseSensitivity(m1.caseSensitivity)
+	}
 	return ret
 }
 
 func (mapapi *P4Map) Insert(lhs string, rhs string, flag P4MapType) {
+	if mapapi == nil || mapapi.handle == nil {
+		return
+	}
 	c_lhs := C.CString(lhs)
 	c_rhs := C.CString(rhs)
 	C.MapApiInsert(mapapi.handle, c_lhs, c_rhs, C.int(flag))
@@ -1796,18 +2035,34 @@ func (mapapi *P4Map) Array() []string {
 }
 
 func (mapapi *P4Map) Clear() {
+	if mapapi == nil || mapapi.handle == nil {
+		return
+	}
 	C.MapApiClear(mapapi.handle)
 }
 
 func (mapapi *P4Map) Count() int {
+	if mapapi == nil || mapapi.handle == nil {
+		return 0
+	}
 	return int(C.MapApiCount(mapapi.handle))
 }
 
 func (mapapi *P4Map) Reverse() {
+	if mapapi == nil || mapapi.handle == nil {
+		return
+	}
 	mapapi.handle = C.MapApiReverse(mapapi.handle)
+	// Reverse builds a new MapApi, so re-apply the case sensitivity.
+	if mapapi.caseSet {
+		C.MapApiSetCaseSensitivity(mapapi.handle, C.int(mapapi.caseSensitivity))
+	}
 }
 
 func (mapapi *P4Map) Translate(input string, dir P4MapDirection) string {
+	if mapapi == nil || mapapi.handle == nil {
+		return ""
+	}
 	s := C.CString(input)
 	res := C.MapApiTranslate(mapapi.handle, s, C.int(dir))
 	C.free(unsafe.Pointer(s))
@@ -1821,6 +2076,9 @@ func (mapapi *P4Map) Translate(input string, dir P4MapDirection) string {
 }
 
 func (mapapi *P4Map) TranslateArray(input string, dir P4MapDirection) []string {
+	if mapapi == nil || mapapi.handle == nil {
+		return []string{}
+	}
 	s := C.CString(input)
 	l := C.int(0)
 	res := C.MapApiTranslateArray(mapapi.handle, s, C.int(dir), &l)
@@ -1839,6 +2097,9 @@ func (mapapi *P4Map) TranslateArray(input string, dir P4MapDirection) []string {
 }
 
 func (mapapi *P4Map) Lhs(i int) string {
+	if mapapi == nil || mapapi.handle == nil {
+		return ""
+	}
 	res := C.MapApiLhs(mapapi.handle, C.int(i))
 	if res == nil {
 		return ""
@@ -1847,6 +2108,9 @@ func (mapapi *P4Map) Lhs(i int) string {
 }
 
 func (mapapi *P4Map) Rhs(i int) string {
+	if mapapi == nil || mapapi.handle == nil {
+		return ""
+	}
 	res := C.MapApiRhs(mapapi.handle, C.int(i))
 	if res == nil {
 		return ""
@@ -1854,6 +2118,9 @@ func (mapapi *P4Map) Rhs(i int) string {
 	return C.GoString(res)
 }
 func (mapapi *P4Map) Type(i int) P4MapType {
+	if mapapi == nil || mapapi.handle == nil {
+		return P4MAP_INCLUDE
+	}
 	return (P4MapType)(int(C.MapApiType(mapapi.handle, C.int(i))))
 }
 
@@ -1915,12 +2182,18 @@ func (md *P4MergeData) IsContentResolve() bool {
 
 }
 
+// ActionType reports the kind of action resolve P4API scheduled. It is
+// empty on a content resolve, where there is no action merger; use
+// IsActionResolve to tell the two apart.
 func (md *P4MergeData) ActionType() *P4Message {
 	if md.actionType != nil {
 		return md.actionType
 	}
 
 	e := C.MergeDataGetType(md.handle)
+	if e == nil {
+		return &P4Message{}
+	}
 	md.actionType = &P4Message{}
 	md.actionType.severity = P4MessageSeverity(C.GetErrorSeverity(e))
 	ec := int(C.GetErrorCount(e))
@@ -1942,12 +2215,17 @@ func (md *P4MergeData) Info() int {
 	return 0
 }
 
+// MergeAction reports the action P4API proposes. Empty on a content
+// resolve - see ActionType.
 func (md *P4MergeData) MergeAction() *P4Message {
 	if md.mergeAction != nil {
 		return md.mergeAction
 	}
 
 	e := C.MergeDataGetMergeAction(md.handle)
+	if e == nil {
+		return &P4Message{}
+	}
 	md.mergeAction = &P4Message{}
 	md.mergeAction.severity = P4MessageSeverity(C.GetErrorSeverity(e))
 	ec := int(C.GetErrorCount(e))
@@ -1964,12 +2242,17 @@ func (md *P4MergeData) MergeAction() *P4Message {
 	return md.mergeAction
 }
 
+// TheirAction reports the action for their revision. Empty on a content
+// resolve - see ActionType.
 func (md *P4MergeData) TheirAction() *P4Message {
 	if md.theirAction != nil {
 		return md.theirAction
 	}
 
 	e := C.MergeDataGetTheirAction(md.handle)
+	if e == nil {
+		return &P4Message{}
+	}
 	md.theirAction = &P4Message{}
 	md.theirAction.severity = P4MessageSeverity(C.GetErrorSeverity(e))
 	ec := int(C.GetErrorCount(e))
@@ -1986,12 +2269,17 @@ func (md *P4MergeData) TheirAction() *P4Message {
 	return md.theirAction
 }
 
+// YourAction reports the action for your revision. Empty on a content
+// resolve - see ActionType.
 func (md *P4MergeData) YourAction() *P4Message {
 	if md.yourAction != nil {
 		return md.yourAction
 	}
 
 	e := C.MergeDataGetYoursAction(md.handle)
+	if e == nil {
+		return &P4Message{}
+	}
 	md.yourAction = &P4Message{}
 	md.yourAction.severity = P4MessageSeverity(C.GetErrorSeverity(e))
 	ec := int(C.GetErrorCount(e))
@@ -2009,10 +2297,7 @@ func (md *P4MergeData) YourAction() *P4Message {
 }
 
 func (md *P4MergeData) String() string {
-	s := C.MergeDataGetString(md.handle)
-	r := C.GoString(s)
-	C.free(unsafe.Pointer(s))
-	return r
+	return C.GoString(C.MergeDataGetString(md.handle))
 }
 
 // P4DepotFile represents a file in the depot.
@@ -2148,3 +2433,204 @@ func parseRevision(rev string) int {
 	parsedRev, _ := strconv.Atoi(rev)
 	return parsedRev
 }
+
+// FileOpenMode mirrors P4API's FileOpenMode (p4/sys/filesys.h).
+type FileOpenMode int
+
+const (
+	FileOpenRead   FileOpenMode = iota // FOM_READ
+	FileOpenWrite                      // FOM_WRITE
+	FileOpenRW                         // FOM_RW
+	FileOpenUWrite                     // FOM_UWRITE
+)
+
+// P4FileBuffer streams a file transfer (e.g. 'p4 print') through Go instead
+// of buffering it in memory or spooling it to a temp file. Register one with
+// P4.SetFileBuffer before running a command that transfers file content.
+type P4FileBuffer interface {
+	// Release is called once per transferred file, when P4API has finished
+	// with that file - it is not an end-of-life signal for the buffer
+	// itself, which stays registered until SetFileBuffer or Close replaces
+	// it. A command transferring N files calls Release N times.
+	Release()
+	Open(name string, mode FileOpenMode) error
+	Write(buf []byte) error
+	Read(buf []byte) (int, error)
+	Close() error
+	SeekTo(offset int64) error
+	SizeHint(size int64)
+}
+
+// SetFileBuffer registers buffer to receive a file transfer's content
+// instead of it being buffered into Run()'s results. Unlike SetProgress,
+// SetOutputHandler, and SetSSOHandler, it is safe to call after Connect() -
+// FileSysBuffer is only consulted when a later command actually transfers a
+// file, never during the connection handshake.
+func (p4 *P4) SetFileBuffer(buffer P4FileBuffer) {
+	p := C.GetFileBuffer(p4.handle)
+	if p != nil {
+		fb_pointer_map.Delete(p)
+		C.FreeFileBuffer(p)
+	}
+	p4.fbhandler = nil
+	if buffer != nil {
+		p4.fbhandler = C.NewFileBuffer()
+		fb_pointer_map.Set(p4.fbhandler, &buffer)
+		C.SetFileBuffer(p4.handle, p4.fbhandler)
+	} else {
+		C.SetFileBuffer(p4.handle, nil)
+	}
+}
+
+// reportCError reports a Go error back through a FileSysBuffer callback's
+// Error* out-param.
+func reportCError(e *C.Error, err error) {
+	msg := C.CString(err.Error())
+	defer C.free(unsafe.Pointer(msg))
+	C.SetError(e, msg)
+}
+
+// Do not delete the handle-map entry here. FileSys::Create stores the buffer
+// and ~FileSys releases it, so Release fires once per transferred file while
+// the C++ buffer lives on for the next one. Dropping the entry on the first
+// Release leaves every later callback unable to find its Go buffer, silently
+// discarding that file's content while Run still reports success. The entry
+// is removed by SetFileBuffer and Close, which own the C++ object.
+//
+//export goCallFbReleaseFunction
+func goCallFbReleaseFunction(ctx unsafe.Pointer) {
+	handler := fb_pointer_map.Get((*C.P4GoFileSysBuffer)(ctx))
+	if handler != nil {
+		(*handler).Release()
+	}
+}
+
+//export goCallFbOpenFunction
+func goCallFbOpenFunction(ctx unsafe.Pointer, name *C.char, mode C.int, e *C.Error) {
+	handler := fb_pointer_map.Get((*C.P4GoFileSysBuffer)(ctx))
+	if handler == nil {
+		return
+	}
+	if err := (*handler).Open(C.GoString(name), FileOpenMode(mode)); err != nil {
+		reportCError(e, err)
+	}
+}
+
+//export goCallFbWriteFunction
+func goCallFbWriteFunction(ctx unsafe.Pointer, buf *C.char, length C.int, e *C.Error) {
+	handler := fb_pointer_map.Get((*C.P4GoFileSysBuffer)(ctx))
+	if handler == nil {
+		return
+	}
+	if err := (*handler).Write(C.GoBytes(unsafe.Pointer(buf), length)); err != nil {
+		reportCError(e, err)
+	}
+}
+
+//export goCallFbReadFunction
+func goCallFbReadFunction(ctx unsafe.Pointer, buf *C.char, length C.int, e *C.Error) C.int {
+	handler := fb_pointer_map.Get((*C.P4GoFileSysBuffer)(ctx))
+	if handler == nil {
+		return 0
+	}
+	dst := unsafe.Slice((*byte)(unsafe.Pointer(buf)), int(length))
+	n, err := (*handler).Read(dst)
+	if err != nil {
+		reportCError(e, err)
+	}
+	return C.int(n)
+}
+
+//export goCallFbCloseFunction
+func goCallFbCloseFunction(ctx unsafe.Pointer, e *C.Error) {
+	handler := fb_pointer_map.Get((*C.P4GoFileSysBuffer)(ctx))
+	if handler == nil {
+		return
+	}
+	if err := (*handler).Close(); err != nil {
+		reportCError(e, err)
+	}
+}
+
+//export goCallFbSeekFunction
+func goCallFbSeekFunction(ctx unsafe.Pointer, offset C.longlong, e *C.Error) {
+	handler := fb_pointer_map.Get((*C.P4GoFileSysBuffer)(ctx))
+	if handler == nil {
+		return
+	}
+	if err := (*handler).SeekTo(int64(offset)); err != nil {
+		reportCError(e, err)
+	}
+}
+
+//export goCallFbSizeHintFunction
+func goCallFbSizeHintFunction(ctx unsafe.Pointer, size C.longlong) {
+	handler := fb_pointer_map.Get((*C.P4GoFileSysBuffer)(ctx))
+	if handler != nil {
+		(*handler).SizeHint(int64(size))
+	}
+}
+
+// PrintStream streams the output of 'p4 print' to an io.Writer without
+// buffering the whole file in memory or spooling it to a temp file.
+type PrintStream struct {
+	p4   *P4
+	args []string
+}
+
+// Print returns a PrintStream for the given 'p4 print' arguments. Call
+// WriteTo to run the command and stream its output.
+func (p4 *P4) Print(args ...string) *PrintStream {
+	return &PrintStream{p4: p4, args: args}
+}
+
+// WriteTo runs 'p4 print' and streams the file content straight to w. The
+// P4 object must not be used concurrently for anything else while WriteTo is
+// running. WriteTo locks its goroutine to the current OS thread for the
+// SetFileBuffer/Run sequence, since P4API keeps OS-thread-local state (debug
+// config, i18n charset conversion, SSL); this covers WriteTo's own calls but
+// not an earlier Connect() made outside it.
+func (s *PrintStream) WriteTo(w io.Writer) (int64, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	fb := &printFileBuffer{w: w}
+	s.p4.SetFileBuffer(fb)
+	defer s.p4.SetFileBuffer(nil)
+
+	runArgs := append([]string{"-o", "-"}, s.args...)
+	_, err := s.p4.Run("print", runArgs...)
+	if err != nil {
+		return fb.written, err
+	}
+	return fb.written, fb.err
+}
+
+// printFileBuffer is a P4FileBuffer that forwards streamed file content to
+// an io.Writer.
+type printFileBuffer struct {
+	w       io.Writer
+	written int64
+	err     error
+}
+
+func (b *printFileBuffer) Release() {}
+
+func (b *printFileBuffer) Open(name string, mode FileOpenMode) error { return nil }
+
+func (b *printFileBuffer) Write(buf []byte) error {
+	n, err := b.w.Write(buf)
+	b.written += int64(n)
+	if err != nil {
+		b.err = err
+	}
+	return err
+}
+
+func (b *printFileBuffer) Read(buf []byte) (int, error) { return 0, io.EOF }
+
+func (b *printFileBuffer) Close() error { return nil }
+
+func (b *printFileBuffer) SeekTo(offset int64) error { return nil }
+
+func (b *printFileBuffer) SizeHint(size int64) {}

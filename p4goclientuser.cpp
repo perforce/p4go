@@ -136,6 +136,17 @@ P4GoProgress::Done( int fail )
     cbDone( this, fail );
 }
 
+P4GoKeepAlive::P4GoKeepAlive( cbIsAlive_t cbIsAlive )
+  : cbIsAlive( cbIsAlive )
+{
+}
+
+int
+P4GoKeepAlive::IsAlive()
+{
+    return cbIsAlive( this );
+}
+
 P4GoHandler::P4GoHandler( cbHandleBin_t cbHandleBin,
                           cbHandleMsg_t cbHandleMsg,
                           cbHandleStat_t cbHandleStat,
@@ -216,6 +227,65 @@ P4GoResolveHandler::Resolve( P4GoMergeData* m )
     return cbResolve( this, m );
 }
 
+P4GoFileSysBuffer::P4GoFileSysBuffer( cbFbRelease_t cbFbRelease,
+                                      cbFbOpen_t cbFbOpen,
+                                      cbFbWrite_t cbFbWrite,
+                                      cbFbRead_t cbFbRead,
+                                      cbFbClose_t cbFbClose,
+                                      cbFbSeek_t cbFbSeek,
+                                      cbFbSizeHint_t cbFbSizeHint )
+  : cbFbRelease( cbFbRelease )
+  , cbFbOpen( cbFbOpen )
+  , cbFbWrite( cbFbWrite )
+  , cbFbRead( cbFbRead )
+  , cbFbClose( cbFbClose )
+  , cbFbSeek( cbFbSeek )
+  , cbFbSizeHint( cbFbSizeHint )
+{
+}
+
+void
+P4GoFileSysBuffer::Release()
+{
+    cbFbRelease( this );
+}
+
+void
+P4GoFileSysBuffer::Open( StrPtr *path, FileOpenMode mode, Error *e )
+{
+    cbFbOpen( this, path->Text(), (int)mode, e );
+}
+
+void
+P4GoFileSysBuffer::Write( const char *buf, int len, Error *e )
+{
+    cbFbWrite( this, (char*)buf, len, e );
+}
+
+int
+P4GoFileSysBuffer::Read( char *buf, int len, Error *e )
+{
+    return cbFbRead( this, buf, len, e );
+}
+
+void
+P4GoFileSysBuffer::Close( Error *e )
+{
+    cbFbClose( this, e );
+}
+
+void
+P4GoFileSysBuffer::Seek( offL_t offset, Error* e )
+{
+    cbFbSeek( this, offset, e );
+}
+
+void
+P4GoFileSysBuffer::SizeHint( offL_t size )
+{
+    cbFbSizeHint( this, size );
+}
+
 P4GoClientUser::P4GoClientUser( P4GoSpecMgr* s )
 {
     specMgr = s;
@@ -225,8 +295,12 @@ P4GoClientUser::P4GoClientUser( P4GoSpecMgr* s )
     handler = 0;
     resolveHandler = 0;
     progress = 0;
+    keepAlive = 0;
+    fileBuffer = 0;
     alive = 1;
     track = false;
+    oldPasswordPromptSeen = false;
+    discardUnusedOldPasswordSlot = false;
 }
 
 P4GoClientUser::~P4GoClientUser()
@@ -241,6 +315,7 @@ P4GoClientUser::Reset()
     // Leave input alone.
 
     alive = 1;
+    oldPasswordPromptSeen = false;
 }
 
 void
@@ -362,6 +437,8 @@ P4GoClientUser::ProcessOutput( StrDict* data )
     if( this->handler ) {
         if( CallOutputMethod( data ) )
             results.AddOutput( data );
+        else
+            delete data;
     } else
         results.AddOutput( data );
 }
@@ -384,6 +461,17 @@ P4GoClientUser::ProcessMessage( Error* e )
             results.AddOutput( e );
     } else
         results.AddOutput( e );
+}
+
+void
+P4GoClientUser::OutputInfo( char level, const char* data )
+{
+    if( P4GODB_CALLS )
+        fprintf( stderr, "[P4] OutputInfo()\n" );
+    if( P4GODB_DATA )
+        fprintf( stderr, "... [%c] %s\n", level, data );
+
+    ProcessOutput( StrRef( data ), false );
 }
 
 /*
@@ -624,6 +712,21 @@ P4GoClientUser::Diff( FileSys* f1,
 }
 
 /*
+ * Return the FileSys to use for a streamed file transfer (e.g. 'p4 print').
+ * When a FileSysBuffer has been registered via SetFileBuffer(), the transfer
+ * is streamed straight to Go instead of going through a temp file.
+ */
+
+FileSys*
+P4GoClientUser::File( FileSysType type )
+{
+    if( P4GODB_CALLS )
+        fprintf( stderr, "[P4] File()\n" );
+
+    return FileSys::Create( type, fileBuffer );
+}
+
+/*
  * convert input from the user into a form digestible to Perforce. This
  * involves either (a) converting any supplied hash to a Perforce form, or
  * (b) running to_s on whatever we were given.
@@ -655,6 +758,47 @@ P4GoClientUser::Prompt( const StrPtr& msg, StrBuf& rsp, int noEcho, Error* e )
         fprintf( stderr, "[P4] Prompt(): %s\n", msg.Text() );
 
     InputData( &rsp, e );
+}
+
+// Unique codes (Subsystem()<<10 | SubCode(), the same fields
+// Error::CheckIdi() compares) for p4/msgs/msgserver.h's OldPasswordPrompt
+// and NewPasswordPrompt ErrorIds. That header isn't part of the public
+// P4API SDK this builds against, so the codes are reconstructed here;
+// ES_SERVER is 7.
+static const int OldPasswordPromptCode = ( 7 << 10 ) | 906;
+static const int NewPasswordPromptCode = ( 7 << 10 ) | 907;
+
+/*
+ * 'p4 password' skips the old-password prompt when the caller already
+ * holds a valid ticket, or when no password is set yet. RunPassword always
+ * queues an old-password answer regardless (see SetDiscardUnusedOldPasswordSlot),
+ * so when it does, and the prompt is skipped, discard that unused answer
+ * here rather than let it be consumed by the new-password prompt instead.
+ * Gated behind discardUnusedOldPasswordSlot so any other caller that hands
+ * this command its own hand-counted SetInput() answers (e.g. a superuser
+ * resetting someone else's password, which is never asked for an old one)
+ * sees no change in behaviour.
+ */
+
+void
+P4GoClientUser::Prompt( Error* err, StrBuf& rsp, int noEcho, Error* e )
+{
+    ErrorId* id = err->GetId( 0 );
+    int code = id ? id->UniqueCode() : 0;
+
+    if( code == OldPasswordPromptCode )
+        oldPasswordPromptSeen = true;
+    else if( code == NewPasswordPromptCode )
+    {
+        if( discardUnusedOldPasswordSlot && !oldPasswordPromptSeen )
+        {
+            StrBuf discard;
+            InputData( &discard, e );
+        }
+        discardUnusedOldPasswordSlot = false;
+    }
+
+    ClientUser::Prompt( err, rsp, noEcho, e );
 }
 
 /*
@@ -746,6 +890,19 @@ P4GoClientUser::AppendInput( char* i )
     input->Put()->Set( i );
 }
 
+void
+P4GoClientUser::AppendInputBytes( const char* i, unsigned int length )
+{
+    if( P4GODB_CALLS )
+        fprintf( stderr, "[P4] AppendInputBytes()\n" );
+
+    StrBuf* value = input->Put();
+    if( length )
+        value->Set( i, length );
+    else
+        value->Clear();
+}
+
 /*
  * Set the Handler object. Double-check that it is either nil or
  * an instance of OutputHandler to avoid future problems
@@ -804,4 +961,12 @@ P4GoClientUser::GetResolveHandler()
     if( P4GODB_CALLS )
         fprintf( stderr, "[P4] GetResolveHandler()\n" );
     return resolveHandler;
+}
+
+void
+P4GoClientUser::SetFileBuffer( P4GoFileSysBuffer* b )
+{
+    if( P4GODB_CALLS )
+        fprintf( stderr, "[P4] SetFileBuffer()\n" );
+    fileBuffer = b;
 }

@@ -28,8 +28,12 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 package p4
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	osuser "os/user"
@@ -282,6 +286,8 @@ func (s *PerforceTestSuite) initClient() {
 
 }
 
+const sbdPass = "P4Go!Super1"
+
 // Need to add fetch client function in the source code
 func (s *PerforceTestSuite) bootstrapSuperUser() {
 	// On p4d 2026.1+ with Secure By Default (SBD), password authentication is
@@ -289,7 +295,6 @@ func (s *PerforceTestSuite) bootstrapSuperUser() {
 	// allowed on a fresh server is p4 passwd (no old password) to set the initial
 	// superuser password. Login immediately after so a ticket is cached in the
 	// default ticket file for all subsequent test connections to use.
-	const sbdPass = "P4Go!Super1"
 
 	// Use the system user (not env vars). In RSH mode p4d auto-creates this
 	// user's record, allowing the initial password to be set without prior auth.
@@ -817,10 +822,12 @@ func (s *PerforceTestSuite) TestFiles() {
 }
 
 type StandardResolveHandler struct {
-	s *PerforceTestSuite
+	s      *PerforceTestSuite
+	called bool
 }
 
 func (h *StandardResolveHandler) Resolve(md P4MergeData) P4MergeStatus {
+	h.called = true
 	client := h.s.p4api.Client()
 	assert.Equal(h.s.T(), "//"+client+"/test_resolve/foo", md.YourName(), "Unexpected Your name: "+md.YourName())
 	assert.Equal(h.s.T(), "//depot/test_resolve/foo#2", md.TheirName(), "Unexpected Their name: "+md.TheirName())
@@ -830,10 +837,12 @@ func (h *StandardResolveHandler) Resolve(md P4MergeData) P4MergeStatus {
 }
 
 type ActionResolveHandler struct {
-	s *PerforceTestSuite
+	s      *PerforceTestSuite
+	called bool
 }
 
 func (h *ActionResolveHandler) Resolve(md P4MergeData) P4MergeStatus {
+	h.called = true
 	if md.IsActionResolve() == true {
 		assert.IsType(h.s.T(), P4MergeData{}, md, "Merge data wasn't a P4MergeData object")
 		assert.Empty(h.s.T(), md.YourName(), "Unexpected Your name: "+md.YourName())
@@ -845,6 +854,7 @@ func (h *ActionResolveHandler) Resolve(md P4MergeData) P4MergeStatus {
 		assert.Empty(h.s.T(), md.MergeAction().String(), "Unexpected merge_action: "+md.MergeAction().String())
 		assert.Equal(h.s.T(), "Branch resolve", md.ActionType().String(), "Unexpected type: "+md.ActionType().String())
 		assert.Equal(h.s.T(), 4, int(md.MergeHint()), "Unexpected merge_hint: %d", int(md.MergeHint()))
+		assert.Contains(h.s.T(), md.String(), "P4GoMergeData - Action", "Unexpected merge data string: "+md.String())
 		return md.MergeHint()
 
 	} else if md.IsContentResolve() == true {
@@ -856,10 +866,12 @@ func (h *ActionResolveHandler) Resolve(md P4MergeData) P4MergeStatus {
 }
 
 type ThirdGenResolveHandler struct {
-	s *PerforceTestSuite
+	s      *PerforceTestSuite
+	called bool
 }
 
 func (h *ThirdGenResolveHandler) Resolve(md P4MergeData) P4MergeStatus {
+	h.called = true
 	if md.IsActionResolve() {
 
 		assert.IsType(h.s.T(), P4MergeData{}, md, "Merge data wasn't a P4MergeData object")
@@ -886,10 +898,10 @@ func (h *ThirdGenResolveHandler) Resolve(md P4MergeData) P4MergeStatus {
 		// assert.Len(h.s.T(), md.Info(), 2, "Unexpected resolve information: %v", md.Info())
 		// res := md.Info()
 
-		// assert.Empty(h.s.T(), md.YourAction().String(), "Unexpected yours_action: "+md.YourAction().String())
-		// assert.Empty(h.s.T(), md.TheirAction().String(), "Unexpected their_action: "+md.TheirAction().String())
-		// assert.Empty(h.s.T(), md.MergeAction().String(), "Unexpected merge_action: "+md.MergeAction().String())
-		// assert.Empty(h.s.T(), md.ActionType().String(), "Unexpected type: "+md.ActionType().String())
+		assert.Empty(h.s.T(), md.YourAction().String(), "Unexpected yours_action: "+md.YourAction().String())
+		assert.Empty(h.s.T(), md.TheirAction().String(), "Unexpected their_action: "+md.TheirAction().String())
+		assert.Empty(h.s.T(), md.MergeAction().String(), "Unexpected merge_action: "+md.MergeAction().String())
+		assert.Empty(h.s.T(), md.ActionType().String(), "Unexpected type: "+md.ActionType().String())
 
 		return md.MergeHint()
 
@@ -900,10 +912,12 @@ func (h *ThirdGenResolveHandler) Resolve(md P4MergeData) P4MergeStatus {
 }
 
 type BinaryResolveHandler struct {
-	s *PerforceTestSuite
+	s      *PerforceTestSuite
+	called bool
 }
 
 func (h *BinaryResolveHandler) Resolve(md P4MergeData) P4MergeStatus {
+	h.called = true
 	if md.IsActionResolve() {
 
 		assert.IsType(h.s.T(), P4MergeData{}, md, "Merge data wasn't a P4MergeData object")
@@ -937,10 +951,10 @@ func (h *BinaryResolveHandler) Resolve(md P4MergeData) P4MergeStatus {
 		assert.NotEmpty(h.s.T(), md.TheirPath(), "TheirPath not set correctly")
 		assert.Equal(h.s.T(), 4, int(md.MergeHint()), "Unexpected merge_hint: %d", int(md.MergeHint()))
 
-		// assert.Empty(h.s.T(), md.YourAction().String(), "Unexpected yours_action: "+md.YourAction().String())
-		// assert.Empty(h.s.T(), md.TheirAction().String(), "Unexpected their_action: "+md.TheirAction().String())
-		// assert.Empty(h.s.T(), md.MergeAction().String(), "Unexpected merge_action: "+md.MergeAction().String())
-		// assert.Empty(h.s.T(), md.ActionType().String(), "Unexpected type: "+md.ActionType().String())
+		assert.Empty(h.s.T(), md.YourAction().String(), "Unexpected yours_action: "+md.YourAction().String())
+		assert.Empty(h.s.T(), md.TheirAction().String(), "Unexpected their_action: "+md.TheirAction().String())
+		assert.Empty(h.s.T(), md.MergeAction().String(), "Unexpected merge_action: "+md.MergeAction().String())
+		assert.Empty(h.s.T(), md.ActionType().String(), "Unexpected type: "+md.ActionType().String())
 
 		return md.MergeHint()
 
@@ -948,6 +962,204 @@ func (h *BinaryResolveHandler) Resolve(md P4MergeData) P4MergeStatus {
 		assert.Fail(h.s.T(), "Unknown resolve type scheduled")
 	}
 	return 1
+}
+
+// contentResolveActionProbe calls the action-resolve accessors from inside a
+// content resolve, where P4GoMergeData's actionmerger is NULL.
+type contentResolveActionProbe struct {
+	s       *PerforceTestSuite
+	reached bool
+}
+
+func (h *contentResolveActionProbe) Resolve(md P4MergeData) P4MergeStatus {
+	if md.IsContentResolve() {
+		h.reached = true
+		assert.Empty(h.s.T(), md.ActionType().String(), "ActionType on a content resolve should be empty")
+		assert.Empty(h.s.T(), md.MergeAction().String(), "MergeAction on a content resolve should be empty")
+		assert.Empty(h.s.T(), md.TheirAction().String(), "TheirAction on a content resolve should be empty")
+		assert.Empty(h.s.T(), md.YourAction().String(), "YourAction on a content resolve should be empty")
+	}
+	return md.MergeHint()
+}
+
+// TestMergeDataActionAccessorsOnContentResolve pins that the action-resolve
+// accessors are safe during an ordinary text conflict. P4GoMergeData returns a
+// NULL Error* for all four when actionmerger is NULL, which is the case for
+// every content resolve, so an unguarded accessor dereferences NULL in C++.
+func (s *PerforceTestSuite) TestMergeDataActionAccessorsOnContentResolve() {
+	s.createClient()
+	defer s.p4api.Close()
+
+	const fname = "merge_action_probe.txt"
+	require.NoError(s.T(), os.WriteFile(fname, []byte("base line\n"), 0644))
+	_, err := s.p4api.Run("add", fname)
+	require.NoError(s.T(), err, "failed to add the test file")
+	_, err = s.p4api.RunSubmit("-d", "merge data probe rev1")
+	require.NoError(s.T(), err, "failed to submit rev1")
+
+	_, err = s.p4api.Run("edit", fname)
+	require.NoError(s.T(), err, "failed to open the file for edit")
+	require.NoError(s.T(), os.WriteFile(fname, []byte("upstream change\n"), 0644))
+	_, err = s.p4api.RunSubmit("-d", "merge data probe rev2")
+	require.NoError(s.T(), err, "failed to submit rev2")
+
+	_, err = s.p4api.Run("sync", fname+"#1")
+	require.NoError(s.T(), err, "failed to sync back to rev 1")
+	_, err = s.p4api.Run("edit", fname)
+	require.NoError(s.T(), err, "failed to reopen the file for edit")
+	require.NoError(s.T(), os.WriteFile(fname, []byte("my local change\n"), 0644))
+	_, _ = s.p4api.Run("sync") // schedules the resolve; reports 'must resolve'
+
+	h := &contentResolveActionProbe{s: s}
+	s.p4api.SetResolveHandler(h)
+	defer s.p4api.SetResolveHandler(nil)
+	defer func() { _, _ = s.p4api.Run("revert", "//...") }()
+	_, _ = s.p4api.Run("resolve")
+
+	require.True(s.T(), h.reached, "the content resolve never reached the handler")
+}
+
+func (s *PerforceTestSuite) TestSetInputBytesPreservesBinaryAttributeBytes() {
+	assert.NotNil(s.T(), s.p4api, "Failed to create Perforce client")
+
+	s.createClient()
+
+	const filePath = "binary_input.txt"
+	const revision = "//depot/binary_input.txt#1"
+	const attributeName = "binary_input"
+
+	err := os.WriteFile(filePath, []byte("binary input test\n"), 0644)
+	require.NoError(s.T(), err, "Failed to create binary input test file")
+	_, err = s.p4api.Run("add", filePath)
+	require.NoError(s.T(), err, "Failed to add binary input test file")
+	_, err = s.p4api.RunSubmit("-d", "Add binary input test file")
+	require.NoError(s.T(), err, "Failed to submit binary input test file")
+
+	payload := make([]byte, 320*1024)
+	for i := range payload {
+		payload[i] = byte(i)
+	}
+	payload[0] = 0x7f
+	payload[7] = 0
+
+	require.NoError(s.T(), s.p4api.SetInputBytes(payload), "SetInputBytes rejected a valid payload")
+	_, err = s.p4api.Run("attribute", "-f", "-i", "-n", attributeName, revision)
+	require.NoError(s.T(), err, "Failed to set binary revision attribute")
+
+	readAttribute := func() []byte {
+		results, err := s.p4api.Run("print", "-q", "-T", attributeName, revision)
+		require.NoError(s.T(), err, "Failed to read binary revision attribute")
+		actual := make([]byte, 0, len(payload))
+		for _, result := range results {
+			if data, ok := result.(P4Data); ok {
+				actual = append(actual, []byte(data)...)
+			}
+		}
+		return actual
+	}
+
+	actual := readAttribute()
+	require.Equal(s.T(), len(payload), len(actual), "Binary revision attribute length changed")
+	if !bytes.Equal(payload, actual) {
+		for i := range payload {
+			if payload[i] != actual[i] {
+				require.Equal(s.T(), payload[i], actual[i], "Binary revision attribute byte changed at offset %d", i)
+			}
+		}
+	}
+	require.True(s.T(), bytes.Equal(payload, actual), "Binary revision attribute bytes changed")
+
+	require.NoError(s.T(), s.p4api.SetInputBytes([]byte{}), "SetInputBytes rejected an empty input")
+	_, err = s.p4api.Run("attribute", "-f", "-i", "-n", attributeName, revision)
+	require.NoError(s.T(), err, "Failed to clear binary revision attribute")
+	results, err := s.p4api.Run("print", "-q", "-T", attributeName, revision)
+	if err != nil {
+		require.Contains(s.T(), err.Error(), "no such attribute", "Failed to inspect cleared binary revision attribute")
+	}
+	for _, result := range results {
+		if data, ok := result.(P4Data); ok {
+			require.Empty(s.T(), data, "Empty binary input reused the previous value")
+		}
+	}
+}
+
+func (s *PerforceTestSuite) TestSetInputBytesKeepsVariadicInputsSeparate() {
+	assert.NotNil(s.T(), s.p4api, "Failed to create Perforce client")
+
+	s.createClient()
+
+	const user = "binary_input_user"
+	userSpec, err := s.p4api.RunFetch("user", user)
+	require.NoError(s.T(), err, "Failed to fetch binary input test user")
+	_, err = s.p4api.RunSave("user", userSpec, "-f")
+	require.NoError(s.T(), err, "Failed to create binary input test user")
+
+	password := []byte("P4Go!Bytes99")
+	require.NoError(s.T(), s.p4api.SetInputBytes(password, password), "SetInputBytes rejected valid passwords")
+	_, err = s.p4api.Run("passwd", user)
+	require.NoError(s.T(), err, "Variadic binary inputs did not satisfy separate password prompts")
+	_, err = s.p4api.RunSave("user", userSpec, "-f")
+	require.NoError(s.T(), err, "Failed to clear password reset for binary input test user")
+
+	userP4 := New()
+	defer userP4.Close()
+	_, _ = userP4.SetCharset("none")
+	userP4.SetPort(s.p4Port)
+	userP4.SetUser(user)
+	userP4.SetPassword(string(password))
+	_, err = userP4.Connect()
+	require.NoError(s.T(), err, "Failed to connect as binary input test user")
+	_, err = userP4.RunLogin()
+	require.NoError(s.T(), err, "Failed to log in as binary input test user")
+
+	replacement := []byte("P4Go!Next99")
+	require.NoError(s.T(), userP4.SetInputBytes(password, []byte{}, replacement, replacement), "SetInputBytes rejected valid inputs")
+	_, err = userP4.Run("passwd")
+	require.ErrorContains(s.T(), err, "at least 8 characters", "Empty binary input did not retain its queue position")
+
+	require.NoError(s.T(), userP4.SetInputBytes(password, replacement, replacement), "SetInputBytes rejected valid passwords")
+	_, err = userP4.Run("passwd")
+	require.NoError(s.T(), err, "Binary inputs did not answer password prompts in order")
+
+	userP4.SetInput(string(replacement))
+	require.NoError(s.T(), userP4.SetInputBytes(password), "SetInputBytes rejected a valid password")
+	require.NoError(s.T(), userP4.SetInputBytes(password), "SetInputBytes rejected a valid password")
+	_, err = userP4.Run("passwd")
+	require.NoError(s.T(), err, "Input from separate SetInput and SetInputBytes calls was not combined")
+}
+
+func (s *PerforceTestSuite) TestSetInputBytesRejectedCallKeepsQueuedInput() {
+	assert.NotNil(s.T(), s.p4api, "Failed to create Perforce client")
+
+	s.createClient()
+
+	const filePath = "rejected_input.txt"
+	const revision = "//depot/rejected_input.txt#1"
+	const attributeName = "rejected_input"
+
+	err := os.WriteFile(filePath, []byte("rejected input test\n"), 0644)
+	require.NoError(s.T(), err, "Failed to create rejected input test file")
+	_, err = s.p4api.Run("add", filePath)
+	require.NoError(s.T(), err, "Failed to add rejected input test file")
+	_, err = s.p4api.RunSubmit("-d", "Add rejected input test file")
+	require.NoError(s.T(), err, "Failed to submit rejected input test file")
+
+	kept := []byte("kept value")
+	require.NoError(s.T(), s.p4api.SetInputBytes(kept), "SetInputBytes rejected a valid input")
+	err = s.p4api.SetInputBytes([]byte("replacement"), make([]byte, 0x1FFFFFFF))
+	require.ErrorContains(s.T(), err, "input 1", "SetInputBytes accepted an input P4API cannot send")
+
+	_, err = s.p4api.Run("attribute", "-f", "-i", "-n", attributeName, revision)
+	require.NoError(s.T(), err, "Failed to set revision attribute")
+	results, err := s.p4api.Run("print", "-q", "-T", attributeName, revision)
+	require.NoError(s.T(), err, "Failed to read revision attribute")
+	actual := []byte{}
+	for _, result := range results {
+		if data, ok := result.(P4Data); ok {
+			actual = append(actual, []byte(data)...)
+		}
+	}
+	require.Equal(s.T(), kept, actual, "Rejected SetInputBytes call replaced previously supplied input")
 }
 
 func (s *PerforceTestSuite) TestResolve() {
@@ -985,7 +1197,7 @@ func (s *PerforceTestSuite) TestResolve() {
 	require.NoError(s.T(), err, "Failed to fetch change")
 	changeSpec["Description"] = "First resolve submit"
 	_, err = s.p4api.RunSubmit(changeSpec)
-	assert.ErrorIs(s.T(), nil, err, "Failed to submit change")
+	require.NoError(s.T(), err, "Failed to submit change")
 	openedFiles, err := s.p4api.Run("opened")
 	require.NoError(s.T(), err, "Failed to fetch opened files")
 	require.Len(s.T(), openedFiles, 0, "Unexpected number of open files")
@@ -1001,7 +1213,7 @@ func (s *PerforceTestSuite) TestResolve() {
 	require.NoError(s.T(), err, "Failed to fetch change")
 	changeSpec["Description"] = "Second resolve submit"
 	_, err = s.p4api.RunSubmit(changeSpec)
-	assert.ErrorIs(s.T(), nil, err, "Failed to submit change")
+	require.NoError(s.T(), err, "Failed to submit change")
 	openedFiles, err = s.p4api.Run("opened")
 	require.NoError(s.T(), err, "Failed to fetch opened files")
 	require.Len(s.T(), openedFiles, 0, "Unexpected number of open files")
@@ -1021,13 +1233,14 @@ func (s *PerforceTestSuite) TestResolve() {
 	s.p4api.SetResolveHandler(handler)
 	res, _ := s.p4api.Run("resolve")
 	require.Len(s.T(), res, 3, "Unexpected number of resolve messages")
+	assert.True(s.T(), handler.called, "StandardResolveHandler.Resolve should have been called")
 
 	changeSpec, err = s.p4api.RunFetch("change")
 	require.NoError(s.T(), err, "Failed to fetch change")
 	changeSpec["Description"] = "Third resolve submit"
 	_, err = s.p4api.RunSubmit(changeSpec)
 	// fmt.Println(o)
-	assert.ErrorIs(s.T(), nil, err, "Failed to submit change")
+	require.NoError(s.T(), err, "Failed to submit change")
 	results, err = s.p4api.Run("opened")
 	require.NoError(s.T(), err, "Failed to run 'opened'")
 	require.Len(s.T(), results, 0, "Unexpected number of open files")
@@ -1047,18 +1260,19 @@ func (s *PerforceTestSuite) TestResolve() {
 		actionResolveCount, _ := s.p4api.Run("resolve", "-n")
 		assert.NotEmpty(s.T(), actionResolveCount[0].(Dictionary)["clientFile"], "Unexpected number of resolves scheduled")
 
-		handler := &ActionResolveHandler{s: s}
-		s.p4api.SetResolveHandler(handler)
+		actionHandler := &ActionResolveHandler{s: s}
+		s.p4api.SetResolveHandler(actionHandler)
 		res, _ := s.p4api.Run("resolve")
 		info := res[0].(Dictionary)
 		assert.Equal(s.T(), "//depot/test_resolve/foo", info["fromFile"], "Unexpected fromFile in info: "+fmt.Sprintf("%v", info["fromFile"]))
 		assert.Equal(s.T(), "branch", info["resolveType"], "Unexpected resolveType in info: "+fmt.Sprintf("%v", info["resolveType"]))
+		assert.True(s.T(), actionHandler.called, "ActionResolveHandler.Resolve should have been called")
 
 		changeSpec, err = s.p4api.RunFetch("change")
 		require.NoError(s.T(), err, "Failed to fetch change")
 		changeSpec["Description"] = "Fourth resolve submit"
 		_, err = s.p4api.RunSubmit(changeSpec)
-		assert.ErrorIs(s.T(), nil, err, "Failed to submit change")
+		require.NoError(s.T(), err, "Failed to submit change")
 		results, err := s.p4api.Run("opened")
 		require.NoError(s.T(), err, "Failed to run 'opened'")
 		require.Len(s.T(), results, 0, "Unexpected number of open files")
@@ -1079,7 +1293,7 @@ func (s *PerforceTestSuite) TestResolve() {
 		require.NoError(s.T(), err, "Failed to fetch change")
 		changeSpec["Description"] = "Fifth resolve submit"
 		_, err = s.p4api.RunSubmit(changeSpec)
-		assert.ErrorIs(s.T(), nil, err, "Failed to submit change")
+		require.NoError(s.T(), err, "Failed to submit change")
 		results, err = s.p4api.Run("opened")
 		require.NoError(s.T(), err, "Failed to run 'opened'")
 		require.Len(s.T(), results, 0, "Unexpected number of open files")
@@ -1092,12 +1306,13 @@ func (s *PerforceTestSuite) TestResolve() {
 		thandler := &ThirdGenResolveHandler{s: s}
 		s.p4api.SetResolveHandler(thandler)
 		_, _ = s.p4api.Run("resolve")
+		assert.True(s.T(), thandler.called, "ThirdGenResolveHandler.Resolve should have been called")
 
 		changeSpec, err = s.p4api.RunFetch("change")
 		require.NoError(s.T(), err, "Failed to fetch change")
 		changeSpec["Description"] = "Sixth resolve submit"
 		_, err = s.p4api.RunSubmit(changeSpec)
-		assert.ErrorIs(s.T(), nil, err, "Failed to submit change")
+		require.NoError(s.T(), err, "Failed to submit change")
 		results, err = s.p4api.Run("opened")
 		require.NoError(s.T(), err, "Failed to run 'opened'")
 		require.Len(s.T(), results, 0, "Unexpected number of open files")
@@ -1121,7 +1336,7 @@ func (s *PerforceTestSuite) TestResolve() {
 		require.NoError(s.T(), err, "Failed to fetch change")
 		changeSpec["Description"] = "First binary resolve submit"
 		_, err = s.p4api.RunSubmit(changeSpec)
-		assert.ErrorIs(s.T(), nil, err, "Failed to submit change")
+		require.NoError(s.T(), err, "Failed to submit change")
 		results, err = s.p4api.Run("opened")
 		require.NoError(s.T(), err, "Failed to run 'opened'")
 		require.Len(s.T(), results, 0, "Unexpected number of open files")
@@ -1135,7 +1350,7 @@ func (s *PerforceTestSuite) TestResolve() {
 		require.NoError(s.T(), err, "Failed to fetch change")
 		changeSpec["Description"] = "Second binary resolve submit"
 		_, err = s.p4api.RunSubmit(changeSpec)
-		assert.ErrorIs(s.T(), nil, err, "Failed to submit change")
+		require.NoError(s.T(), err, "Failed to submit change")
 		results, err = s.p4api.Run("opened")
 		require.NoError(s.T(), err, "Failed to run 'opened'")
 		require.Len(s.T(), results, 0, "Unexpected number of open files")
@@ -1152,7 +1367,7 @@ func (s *PerforceTestSuite) TestResolve() {
 		require.NoError(s.T(), err, "Failed to fetch change")
 		changeSpec["Description"] = "Third binary resolve submit"
 		_, err = s.p4api.RunSubmit(changeSpec)
-		assert.ErrorIs(s.T(), nil, err, "Failed to submit change")
+		require.NoError(s.T(), err, "Failed to submit change")
 		results, err = s.p4api.Run("opened")
 		require.NoError(s.T(), err, "Failed to run 'opened'")
 		require.Len(s.T(), results, 0, "Unexpected number of open files")
@@ -1184,12 +1399,13 @@ func (s *PerforceTestSuite) TestResolve() {
 		bhandler := &BinaryResolveHandler{s: s}
 		s.p4api.SetResolveHandler(bhandler)
 		_, _ = s.p4api.Run("resolve")
+		assert.True(s.T(), bhandler.called, "BinaryResolveHandler.Resolve should have been called")
 
 		changeSpec, err = s.p4api.RunFetch("change")
 		require.NoError(s.T(), err, "Failed to fetch change")
 		changeSpec["Description"] = "Final binary resolve submit"
 		_, err = s.p4api.RunSubmit(changeSpec)
-		assert.ErrorIs(s.T(), nil, err, "Failed to submit change")
+		require.NoError(s.T(), err, "Failed to submit change")
 		results, err = s.p4api.Run("opened")
 		require.NoError(s.T(), err, "Failed to run 'opened'")
 		require.Len(s.T(), results, 0, "Unexpected number of open files")
@@ -1255,7 +1471,8 @@ func (s *PerforceTestSuite) TestPassword() {
 	res, _ := s.p4api.RunLogin()
 	assert.IsType(s.T(), Dictionary{}, res, "Login failed")
 	userSpecs, _ = s.p4api.RunFetch("user", "test_user")
-	msg, _ := s.p4api.RunPassword(testPass, testPass+"b")
+	msg, err := s.p4api.RunPassword(testPass, testPass+"b")
+	require.NoError(s.T(), err, "RunPassword should succeed")
 	assert.Equal(s.T(), "Password updated.", msg.String(), "Password not updated")
 
 	oldUser := userSpecs["User"]
@@ -1268,7 +1485,8 @@ func (s *PerforceTestSuite) TestPassword() {
 	assert.IsType(s.T(), Dictionary{}, res, "Login failed")
 	_, err = s.p4api.RunSave("user", fooBarSpecs)
 	assert.Nil(s.T(), err, "Failed to save user spec")
-	msg, _ = s.p4api.RunPassword(testPass, testPass+"b")
+	msg, err = s.p4api.RunPassword(testPass, testPass+"b")
+	require.NoError(s.T(), err, "RunPassword should succeed")
 	assert.Equal(s.T(), "Password updated.", msg.String(), "Password not updated")
 
 	_, err = os.Stat(s.p4api.TicketFile())
@@ -1840,7 +2058,7 @@ func (s *PerforceTestSuite) TestOutput() {
 	}
 
 	_, err = s.p4api.RunSubmit("-d", "test")
-	assert.ErrorIs(s.T(), nil, err, "Failed to submit test")
+	require.NoError(s.T(), err, "Failed to submit test")
 
 	// P4MessageSeverity value
 	// P4MESSAGE_EMPTY = 0
@@ -1977,7 +2195,7 @@ func (s *PerforceTestSuite) TestShelve() {
 	}
 
 	_, err = s.p4api.RunSubmit("-d", "test")
-	assert.ErrorIs(s.T(), nil, err, "Failed to submit test")
+	require.NoError(s.T(), err, "Failed to submit test")
 
 	_, _ = s.p4api.Run("sync", "#0")
 	_, _ = s.p4api.Run("sync")
@@ -1987,21 +2205,21 @@ func (s *PerforceTestSuite) TestShelve() {
 		filepath := fmt.Sprintf("test_files/%s.txt", name)
 		_, _ = s.p4api.Run("edit", filepath)
 		file, err := os.OpenFile(filepath, os.O_APPEND|os.O_WRONLY, 0644)
-		assert.ErrorIs(s.T(), nil, err, fmt.Sprintf("Failed to open file for editing: %s", name))
+		require.NoError(s.T(), err, fmt.Sprintf("Failed to open file for editing: %s", name))
 
 		_, err = file.WriteString("Change for a shelf\n")
-		assert.ErrorIs(s.T(), nil, err, fmt.Sprintf("Failed to write to file: %s", name))
+		require.NoError(s.T(), err, fmt.Sprintf("Failed to write to file: %s", name))
 		file.Close()
 	}
 
 	// Create a pending change
 	changeSpec, err := s.p4api.RunFetch("change")
-	assert.ErrorIs(s.T(), nil, err, "Failed to get change spec")
+	require.NoError(s.T(), err, "Failed to get change spec")
 	changeSpec["Description"] = "My shelf"
 
 	// Shelve the lot
 	shelveSpecList, err := s.p4api.RunShelve(changeSpec)
-	assert.ErrorIs(s.T(), nil, err, "Failed to get shelve spec")
+	require.NoError(s.T(), err, "Failed to get shelve spec")
 	shelveSpec := shelveSpecList[0]
 	changeNum := shelveSpec["change"]
 
@@ -2401,7 +2619,7 @@ func (s *PerforceTestSuite) TestUnload() {
 		}
 
 		_, err = s.p4api.RunSubmit("-d", "test")
-		assert.ErrorIs(s.T(), nil, err, "Failed to submit test")
+		require.NoError(s.T(), err, "Failed to submit test")
 
 		sync, _ := s.p4api.Run("have")
 		assert.Greater(s.T(), len(sync), 0, "Have list was empty!")
@@ -2745,6 +2963,15 @@ type NewOutputHandler struct {
 	messageOutput []P4Message
 }
 
+type reportingStatHandler struct {
+	NewOutputHandler
+}
+
+func (h *reportingStatHandler) HandleStat(dict Dictionary) P4OutputHandlerResult {
+	h.statOutput = append(h.statOutput, dict)
+	return P4OUTPUTHANDLER_REPORT
+}
+
 func (h *NewOutputHandler) HandleStat(dict Dictionary) P4OutputHandlerResult {
 	h.statOutput = append(h.statOutput, dict)
 	return P4OUTPUTHANDLER_HANDLED
@@ -2838,6 +3065,25 @@ func (s *PerforceTestSuite) TestOutputHandler() {
 	ret, err := s.p4api.Disconnect()
 	assert.True(s.T(), ret, "should disconnect")
 	assert.Nil(s.T(), err, "should disconnect")
+	s.p4api.Close()
+}
+
+func (s *PerforceTestSuite) TestOutputHandlerReportsTaggedOutput() {
+	_, err := s.p4api.Connect()
+	require.NoError(s.T(), err)
+
+	handler := &reportingStatHandler{}
+	s.p4api.SetHandler(handler)
+	results, err := s.p4api.Run("info")
+	require.NoError(s.T(), err)
+	require.Len(s.T(), handler.statOutput, 1)
+	require.Len(s.T(), results, 1)
+	require.Equal(s.T(), handler.statOutput[0], results[0])
+
+	s.p4api.SetHandler(nil)
+	connected, err := s.p4api.Disconnect()
+	require.NoError(s.T(), err)
+	require.True(s.T(), connected)
 	s.p4api.Close()
 }
 
@@ -3304,6 +3550,1018 @@ func (s *PerforceTestSuite) TestResolveHandlerClearThenClose() {
 	p4.Close()
 }
 
+func (s *PerforceTestSuite) TestEnumStrings() {
+	// Test P4MessageSeverity String() method for all values
+	assert.Equal(s.T(), "empty", P4MESSAGE_EMPTY.String())
+	assert.Equal(s.T(), "info", P4MESSAGE_INFO.String())
+	assert.Equal(s.T(), "warn", P4MESSAGE_WARN.String())
+	assert.Equal(s.T(), "failed", P4MESSAGE_FAILED.String())
+	assert.Equal(s.T(), "fatal", P4MESSAGE_FATAL.String())
+	assert.Equal(s.T(), "unknown", P4MessageSeverity(99).String())
+
+	// Test P4OutputHandlerResult String() method for all values
+	assert.Equal(s.T(), "report", P4OUTPUTHANDLER_REPORT.String())
+	assert.Equal(s.T(), "handled", P4OUTPUTHANDLER_HANDLED.String())
+	assert.Equal(s.T(), "cancel", P4OUTPUTHANDLER_CANCEL.String())
+	assert.Equal(s.T(), "unknown", P4OutputHandlerResult(99).String())
+
+	// Test P4SSOResult String() method for all values
+	assert.Equal(s.T(), "pass", P4SSO_PASS.String())
+	assert.Equal(s.T(), "fail", P4SSO_FAIL.String())
+	assert.Equal(s.T(), "unset", P4SSO_UNSET.String())
+	assert.Equal(s.T(), "exit", P4SSO_EXIT.String())
+	assert.Equal(s.T(), "skip", P4SSO_SKIP.String())
+	assert.Equal(s.T(), "unknown", P4SSOResult(99).String())
+}
+
+func (s *PerforceTestSuite) TestNonServerCoverage() {
+	// Test methods that don't require a server connection
+	p4 := New()
+	require.NotNil(s.T(), p4, "New() should return a valid P4 instance")
+	defer p4.Close()
+
+	// Test Identify
+	version := p4.Identify()
+	assert.NotEmpty(s.T(), version, "Identify should return non-empty version string")
+
+	// Test Tagged/SetTagged
+	origTagged := p4.Tagged()
+	p4.SetTagged(true)
+	assert.True(s.T(), p4.Tagged(), "Tagged should be true after SetTagged(true)")
+	p4.SetTagged(false)
+	assert.False(s.T(), p4.Tagged(), "Tagged should be false after SetTagged(false)")
+	p4.SetTagged(origTagged)
+
+	// Test Debug/SetDebug
+	origDebug := p4.Debug()
+	p4.SetDebug(3)
+	assert.Equal(s.T(), 3, p4.Debug(), "Debug should be 3 after SetDebug(3)")
+	p4.SetDebug(origDebug)
+
+	// Test Charset/SetCharset
+	_, err := p4.SetCharset("none")
+	assert.NoError(s.T(), err, "SetCharset('none') should not error")
+
+	// Test Cwd/SetCwd
+	origCwd := p4.Cwd()
+	testCwd := "/tmp"
+	p4.SetCwd(testCwd)
+	assert.Equal(s.T(), testCwd, p4.Cwd(), "Cwd should match SetCwd value")
+	p4.SetCwd(origCwd)
+
+	// Test Host/SetHost
+	testHost := "testhost"
+	p4.SetHost(testHost)
+	assert.Equal(s.T(), testHost, p4.Host(), "Host should match SetHost value")
+
+	// Test Language/SetLanguage
+	testLang := "en"
+	p4.SetLanguage(testLang)
+	assert.Equal(s.T(), testLang, p4.Language(), "Language should match SetLanguage value")
+
+	// Test GetP4ConfigFile
+	configFile := p4.GetP4ConfigFile()
+	assert.IsType(s.T(), "", configFile, "GetP4ConfigFile should return a string")
+
+	// Test SetProtocol
+	p4.SetProtocol("tag", "")
+	// SetProtocol has no return value
+
+	// Test SetVar
+	p4.SetVar("P4TEST", "testvalue")
+
+	// Test Dictionary.ResultType
+	dict := Dictionary{}
+	assert.Equal(s.T(), P4RESULTTYPE_DICT, dict.ResultType(), "Dictionary.ResultType should be P4RESULTTYPE_DICT")
+
+	// Test P4Message.ResultType
+	msg := P4Message{}
+	assert.Equal(s.T(), P4RESULTTYPE_MESSAGE, msg.ResultType(), "P4Message.ResultType should be P4RESULTTYPE_MESSAGE")
+
+	// Test P4MessageLine.String
+	line := P4MessageLine{
+		severity: P4MESSAGE_INFO,
+		code:     12345,
+		fmt:      "Test message",
+	}
+	lineStr := line.String()
+	assert.NotEmpty(s.T(), lineStr, "P4MessageLine.String should return non-empty string")
+}
+
+func (s *PerforceTestSuite) TestMapOperationsCoverage() {
+	// Test map operations: NewMap → Insert → String → Clear → re-Insert → TranslateArray
+	m := NewMap()
+	require.NotNil(s.T(), m, "NewMap should return a valid map")
+	defer m.Close()
+
+	// Initially empty
+	assert.Empty(s.T(), m.Array(), "New map should have empty array")
+
+	// Insert mapping
+	m.Insert("//depot/main/...", "//client/main/...", P4MAP_INCLUDE)
+	assert.NotEmpty(s.T(), m.String(), "Map.String should return non-empty after insert")
+	assert.Len(s.T(), m.Array(), 1, "Array should have 1 entry after insert")
+
+	// Clear
+	m.Clear()
+	assert.Empty(s.T(), m.Array(), "Array should be empty after Clear")
+
+	// Re-insert multiple mappings
+	m.Insert("//depot/a/...", "//ws/a/...", P4MAP_INCLUDE)
+	m.Insert("//depot/b/...", "//ws/b/...", P4MAP_INCLUDE)
+	assert.Len(s.T(), m.Array(), 2, "Array should have 2 entries after re-insert")
+
+	// TranslateArray - test with single paths since it takes a string, not []string
+	translated1 := m.TranslateArray("//depot/a/file.txt", 0)
+	assert.NotEmpty(s.T(), translated1, "TranslateArray should translate path")
+	if len(translated1) > 0 {
+		assert.Equal(s.T(), "//ws/a/file.txt", translated1[0], "First path should translate correctly")
+	}
+	translated2 := m.TranslateArray("//depot/b/file.txt", 0)
+	assert.NotEmpty(s.T(), translated2, "TranslateArray should translate path")
+	if len(translated2) > 0 {
+		assert.Equal(s.T(), "//ws/b/file.txt", translated2[0], "Second path should translate correctly")
+	}
+}
+
+// captureAllHandler implements P4OutputHandler for testing handler callbacks.
+// Records all output types: stat, text, binary, message.
+// HandleSpec and HandleTrack are no-ops because:
+// - HandleSpec: the CallOutputMethod(P4GoSpecData*) bridge is stubbed out in p4goclientuser.cpp
+// - HandleTrack: -Ztrack output is collected through results.AddTrack(), not routed to handler
+type captureAllHandler struct {
+	statOutput    []Dictionary
+	textOutput    []string
+	binaryOutput  [][]byte
+	messageOutput []P4Message
+}
+
+func (h *captureAllHandler) HandleStat(dict Dictionary) P4OutputHandlerResult {
+	h.statOutput = append(h.statOutput, dict)
+	return P4OUTPUTHANDLER_HANDLED
+}
+
+func (h *captureAllHandler) HandleText(text string) P4OutputHandlerResult {
+	h.textOutput = append(h.textOutput, text)
+	return P4OUTPUTHANDLER_HANDLED
+}
+
+func (h *captureAllHandler) HandleBinary(data []byte) P4OutputHandlerResult {
+	h.binaryOutput = append(h.binaryOutput, data)
+	return P4OUTPUTHANDLER_HANDLED
+}
+
+func (h *captureAllHandler) HandleMessage(msg P4Message) P4OutputHandlerResult {
+	h.messageOutput = append(h.messageOutput, msg)
+	return P4OUTPUTHANDLER_HANDLED
+}
+
+func (h *captureAllHandler) HandleSpec(_ Dictionary) P4OutputHandlerResult {
+	// No-op: dead bridge path (CallOutputMethod stubbed)
+	return P4OUTPUTHANDLER_HANDLED
+}
+
+func (h *captureAllHandler) HandleTrack(_ string) P4OutputHandlerResult {
+	// No-op: track output via results.AddTrack, not handler
+	return P4OUTPUTHANDLER_HANDLED
+}
+
+func (s *PerforceTestSuite) TestP4MessageFieldsAndRunDelete() {
+	assert.NotNil(s.T(), s.p4api, "Failed to create Perforce client")
+	_, err := s.p4api.Connect()
+	require.NoError(s.T(), err, "Failed to connect to Perforce server")
+
+	s.createClient()
+
+	// Create and delete a label to get a real INFO P4Message
+	labelName := fmt.Sprintf("test_label_%d", time.Now().UnixNano())
+	labelSpec, err := s.p4api.RunFetch("label", labelName)
+	require.NoError(s.T(), err, "Failed to fetch label spec")
+
+	labelSpec["Description"] = "Test label for message validation\n"
+	_, err = s.p4api.RunSave("label", labelSpec)
+	require.NoError(s.T(), err, "Failed to save label")
+
+	// RunDelete to get INFO message
+	msg, err := s.p4api.RunDelete("label", labelName)
+	require.NoError(s.T(), err, "Failed to delete label")
+	require.NotNil(s.T(), msg, "RunDelete should return a P4Message")
+
+	// Assert P4Message fields
+	assert.Equal(s.T(), P4MESSAGE_INFO, msg.Severity(), "Severity should be INFO")
+	assert.Greater(s.T(), msg.Count(), 0, "Count should be > 0")
+	assert.NotEmpty(s.T(), msg.String(), "String() should be non-empty")
+	assert.NotEmpty(s.T(), msg.GetMsgDict(), "GetMsgDict() should be non-empty")
+	assert.Equal(s.T(), P4RESULTTYPE_MESSAGE, msg.ResultType(), "ResultType should be P4RESULTTYPE_MESSAGE")
+
+	// Validate bit-field accessors return consistent values
+	if msg.Count() > 0 {
+		id := msg.Id(0)
+		uniqueCode := msg.UniqueCode(0)
+		subCode := msg.SubCode(0)
+		subsystem := msg.Subsystem(0)
+		generic := msg.Generic(0)
+		argCount := msg.ArgCount(0)
+
+		// Verify the extracted fields can reconstruct parts of the original ID
+		assert.Equal(s.T(), id&0xffff, uniqueCode, "UniqueCode should be low 16 bits of ID")
+		assert.Equal(s.T(), id&0x3ff, subCode, "SubCode should be low 10 bits of ID")
+		assert.Equal(s.T(), (id>>10)&0x3f, subsystem, "Subsystem should be bits 10-15 of ID")
+		assert.Equal(s.T(), (id>>16)&0xff, generic, "Generic should be bits 16-23 of ID")
+		assert.Equal(s.T(), (id>>24)&0x0f, argCount, "ArgCount should be bits 24-27 of ID")
+		assert.Equal(s.T(), P4MESSAGE_INFO, msg.LineSeverity(0), "LineSeverity should match message Severity")
+	}
+
+	ret, err := s.p4api.Disconnect()
+	assert.True(s.T(), ret, "should disconnect")
+	require.NoError(s.T(), err, "should disconnect")
+	s.p4api.Close()
+}
+
+func (s *PerforceTestSuite) TestHandlerCallbacksText() {
+	assert.NotNil(s.T(), s.p4api, "Failed to create Perforce client")
+	_, err := s.p4api.Connect()
+	require.NoError(s.T(), err, "Failed to connect to Perforce server")
+
+	s.createClient()
+
+	// Create and submit a text file
+	testFile := "handler_test.txt"
+	err = os.WriteFile(testFile, []byte("Test content for handler\n"), 0644)
+	require.NoError(s.T(), err, "Failed to create file")
+
+	_, _ = s.p4api.Run("add", testFile)
+	changeSpec, err := s.p4api.RunFetch("change")
+	require.NoError(s.T(), err, "Failed to fetch change")
+	changeSpec["Description"] = "Add test file for handler"
+	_, err = s.p4api.RunSubmit(changeSpec)
+	require.NoError(s.T(), err, "Failed to submit change")
+
+	// Set handler and print the file
+	handler := &captureAllHandler{}
+	s.p4api.SetHandler(handler)
+
+	_, _ = s.p4api.Run("print", "//depot/"+testFile)
+
+	// Assert textOutput is non-empty
+	assert.NotEmpty(s.T(), handler.textOutput, "textOutput should be non-empty after print")
+
+	ret, err := s.p4api.Disconnect()
+	assert.True(s.T(), ret, "should disconnect")
+	require.NoError(s.T(), err, "should disconnect")
+	s.p4api.Close()
+}
+
+func (s *PerforceTestSuite) TestHandlerCallbacksBinary() {
+	assert.NotNil(s.T(), s.p4api, "Failed to create Perforce client")
+	_, err := s.p4api.Connect()
+	require.NoError(s.T(), err, "Failed to connect to Perforce server")
+
+	s.createClient()
+
+	// Create and submit a binary file
+	testFile := "handler_test.bin"
+	binaryData := []byte{0x00, 0x01, 0x02, 0xFF, 0xFE, 0xFD}
+	err = os.WriteFile(testFile, binaryData, 0644)
+	require.NoError(s.T(), err, "Failed to create binary file")
+
+	_, _ = s.p4api.Run("add", "-t", "binary", testFile)
+	changeSpec, err := s.p4api.RunFetch("change")
+	require.NoError(s.T(), err, "Failed to fetch change")
+	changeSpec["Description"] = "Add binary file for handler"
+	_, err = s.p4api.RunSubmit(changeSpec)
+	require.NoError(s.T(), err, "Failed to submit change")
+
+	// Set handler and print the binary file
+	handler := &captureAllHandler{}
+	s.p4api.SetHandler(handler)
+
+	_, _ = s.p4api.Run("print", "//depot/"+testFile)
+
+	// Assert binaryOutput is non-empty
+	assert.NotEmpty(s.T(), handler.binaryOutput, "binaryOutput should be non-empty after print")
+
+	ret, err := s.p4api.Disconnect()
+	assert.True(s.T(), ret, "should disconnect")
+	require.NoError(s.T(), err, "should disconnect")
+	s.p4api.Close()
+}
+
+func (s *PerforceTestSuite) TestPrintStreamWriteTo() {
+	assert.NotNil(s.T(), s.p4api, "Failed to create Perforce client")
+	_, err := s.p4api.Connect()
+	require.NoError(s.T(), err, "Failed to connect to Perforce server")
+
+	s.createClient()
+
+	// Create and submit a binary file. Binary type avoids line-ending
+	// translation, so the streamed bytes can be asserted exactly.
+	testFile := "print_stream_test.bin"
+	content := []byte{0x00, 0x0a, 0x0d, 0x0d, 0x0a, 0x01, 0x02, 0xff, 0xfe, 0xfd}
+	err = os.WriteFile(testFile, content, 0644)
+	require.NoError(s.T(), err, "Failed to create file")
+
+	_, _ = s.p4api.Run("add", "-t", "binary", testFile)
+	changeSpec, err := s.p4api.RunFetch("change")
+	require.NoError(s.T(), err, "Failed to fetch change")
+	changeSpec["Description"] = "Add test file for PrintStream"
+	_, err = s.p4api.RunSubmit(changeSpec)
+	require.NoError(s.T(), err, "Failed to submit change")
+
+	// Stream the file straight into a buffer via PrintStream.WriteTo,
+	// instead of going through Run()'s buffered results or a handler.
+	var buf bytes.Buffer
+	n, err := s.p4api.Print("//depot/" + testFile).WriteTo(&buf)
+	require.NoError(s.T(), err, "WriteTo should not fail")
+
+	assert.Equal(s.T(), int64(len(content)), n, "WriteTo should report the exact byte count written")
+	assert.Equal(s.T(), content, buf.Bytes(), "streamed content should match the submitted file exactly")
+
+	ret, err := s.p4api.Disconnect()
+	assert.True(s.T(), ret, "should disconnect")
+	require.NoError(s.T(), err, "should disconnect")
+	s.p4api.Close()
+}
+
+// errWriter is an io.Writer that always fails, used to exercise the path
+// from a P4FileBuffer.Write error back through P4API's Error* out-param to
+// WriteTo's returned error.
+type errWriter struct {
+	err error
+}
+
+func (w *errWriter) Write(p []byte) (int, error) {
+	return 0, w.err
+}
+
+func (s *PerforceTestSuite) TestPrintStreamWriteToPropagatesWriterError() {
+	assert.NotNil(s.T(), s.p4api, "Failed to create Perforce client")
+	_, err := s.p4api.Connect()
+	require.NoError(s.T(), err, "Failed to connect to Perforce server")
+
+	s.createClient()
+
+	testFile := "print_stream_error_test.bin"
+	content := []byte{0x01, 0x02, 0x03, 0x04}
+	err = os.WriteFile(testFile, content, 0644)
+	require.NoError(s.T(), err, "Failed to create file")
+
+	_, _ = s.p4api.Run("add", "-t", "binary", testFile)
+	changeSpec, err := s.p4api.RunFetch("change")
+	require.NoError(s.T(), err, "Failed to fetch change")
+	changeSpec["Description"] = "Add test file for PrintStream error path"
+	_, err = s.p4api.RunSubmit(changeSpec)
+	require.NoError(s.T(), err, "Failed to submit change")
+
+	// A writer that always fails should surface its error through
+	// WriteTo, proving the P4FileBuffer error path (Go error ->
+	// SetError -> Error* -> Run()'s returned error) actually round-trips.
+	wantErr := errors.New("simulated write failure")
+	w := &errWriter{err: wantErr}
+	n, err := s.p4api.Print("//depot/" + testFile).WriteTo(w)
+
+	require.Error(s.T(), err, "WriteTo should fail when the writer fails")
+	assert.Contains(s.T(), err.Error(), wantErr.Error(), "WriteTo's error should carry the writer's error message")
+	assert.Equal(s.T(), int64(0), n, "no bytes should be reported written when the first write fails")
+
+	ret, err := s.p4api.Disconnect()
+	assert.True(s.T(), ret, "should disconnect")
+	require.NoError(s.T(), err, "should disconnect")
+	s.p4api.Close()
+}
+
+func (s *PerforceTestSuite) TestHandlerCallbacksMessage() {
+	assert.NotNil(s.T(), s.p4api, "Failed to create Perforce client")
+	_, err := s.p4api.Connect()
+	require.NoError(s.T(), err, "Failed to connect to Perforce server")
+
+	s.createClient()
+
+	// Set handler before running a command that generates a message
+	handler := &captureAllHandler{}
+	s.p4api.SetHandler(handler)
+
+	// Run sync on non-existent path to generate a message
+	_, _ = s.p4api.Run("sync", "//nonexistent/...")
+
+	// Assert messageOutput is non-empty
+	assert.NotEmpty(s.T(), handler.messageOutput, "messageOutput should be non-empty after sync non-existent")
+
+	ret, err := s.p4api.Disconnect()
+	assert.True(s.T(), ret, "should disconnect")
+	require.NoError(s.T(), err, "should disconnect")
+	s.p4api.Close()
+}
+
+func (s *PerforceTestSuite) TestTrackResults() {
+	assert.NotNil(s.T(), s.p4api, "Failed to create Perforce client")
+
+	// SetTrack must be called before Connect
+	_, err := s.p4api.SetTrack(true)
+	require.NoError(s.T(), err, "Failed to set track")
+	assert.True(s.T(), s.p4api.Track(), "Track should be true after SetTrack(true)")
+
+	_, err = s.p4api.Connect()
+	require.NoError(s.T(), err, "Failed to connect to Perforce server")
+
+	// Run a command and count P4Track results
+	results, err := s.p4api.Run("info")
+	require.NoError(s.T(), err, "Failed to run info")
+
+	trackCount := 0
+	for _, r := range results {
+		if _, ok := r.(P4Track); ok {
+			trackCount++
+		}
+	}
+
+	assert.Greater(s.T(), trackCount, 0, "Should have at least one P4Track result when tracking is enabled")
+
+	ret, err := s.p4api.Disconnect()
+	assert.True(s.T(), ret, "should disconnect")
+	require.NoError(s.T(), err, "should disconnect")
+	s.p4api.Close()
+}
+
+// countingFileBuffer records how many separate files one registered buffer is
+// handed, which is what distinguishes a per-file Release from an end-of-life one.
+type countingFileBuffer struct {
+	opens  int
+	closes int
+	data   []byte
+}
+
+func (b *countingFileBuffer) Release()                               {}
+func (b *countingFileBuffer) Open(name string, m FileOpenMode) error { b.opens++; return nil }
+func (b *countingFileBuffer) Write(buf []byte) error {
+	b.data = append(b.data, buf...)
+	return nil
+}
+func (b *countingFileBuffer) Read(buf []byte) (int, error) { return 0, nil }
+func (b *countingFileBuffer) Close() error                 { b.closes++; return nil }
+func (b *countingFileBuffer) SeekTo(offset int64) error    { return nil }
+func (b *countingFileBuffer) SizeHint(size int64)          {}
+
+// TestFileBufferReceivesEverySuccessiveTransfer pins that one registered
+// P4FileBuffer keeps receiving content for every later command. FileSys calls
+// Release() once per transferred file, so treating the first Release() as
+// "finished forever" silently drops every transfer after the first while Run()
+// still reports success.
+func (s *PerforceTestSuite) TestFileBufferReceivesEverySuccessiveTransfer() {
+	s.createClient()
+	defer s.p4api.Close()
+
+	const firstName = "fb_first.txt"
+	const secondName = "fb_second.txt"
+	firstBody := "first file contents\n"
+	secondBody := "second file contents, deliberately longer\n"
+
+	require.NoError(s.T(), os.WriteFile(firstName, []byte(firstBody), 0644), "failed to write the first file")
+	require.NoError(s.T(), os.WriteFile(secondName, []byte(secondBody), 0644), "failed to write the second file")
+	_, err := s.p4api.Run("add", "-t", "binary", firstName, secondName)
+	require.NoError(s.T(), err, "failed to add the test files")
+	_, err = s.p4api.RunSubmit("-d", "file buffer transfer test")
+	require.NoError(s.T(), err, "failed to submit the test files")
+
+	buf := &countingFileBuffer{}
+	s.p4api.SetFileBuffer(buf)
+	defer s.p4api.SetFileBuffer(nil)
+
+	_, err = s.p4api.Run("print", "-o", "-", "//depot/"+firstName)
+	require.NoError(s.T(), err, "printing the first file failed")
+	require.Equal(s.T(), 1, buf.opens, "the buffer did not receive the first file")
+	require.Contains(s.T(), string(buf.data), firstBody, "the first file's content did not reach the buffer")
+
+	_, err = s.p4api.Run("print", "-o", "-", "//depot/"+secondName)
+	require.NoError(s.T(), err, "printing the second file failed")
+
+	require.Equal(s.T(), 2, buf.opens,
+		"the buffer was not reused for the second transfer; its content was silently discarded")
+	require.Contains(s.T(), string(buf.data), secondBody,
+		"the second file's content never reached the buffer even though Run() reported success")
+}
+
+// TestP4MessageStringNilSafe pins P4Message.String() against a nil receiver.
+// Several Run* helpers (RunPassword, RunSave, RunDelete) return a nil
+// *P4Message alongside a non-nil error on failure; calling .String() on that
+// result without checking the error first must not panic.
+func TestP4MessageStringNilSafe(t *testing.T) {
+	var msg *P4Message
+	assert.Equal(t, "", msg.String())
+}
+
 func TestPerforceTestSuite(t *testing.T) {
 	suite.Run(t, new(PerforceTestSuite))
+}
+
+func TestEmptyP4APIErrorIsIgnored(t *testing.T) {
+	assert.False(t, hasP4Error(P4MESSAGE_EMPTY))
+	assert.True(t, hasP4Error(P4MESSAGE_FAILED))
+}
+
+func TestTrustFileUsesP4TrustEnvironment(t *testing.T) {
+	trustFile := filepath.Join(t.TempDir(), "trust")
+	ticketFile := filepath.Join(t.TempDir(), "tickets")
+	t.Setenv("P4TRUST", trustFile)
+	t.Setenv("P4TICKETS", ticketFile)
+
+	p4 := New()
+	t.Cleanup(p4.Close)
+
+	assert.Equal(t, trustFile, p4.TrustFile())
+}
+
+// ---- P4GO-111: P4Map case sensitivity ----
+
+func TestP4MapCaseSensitiveRejectsWrongCase(t *testing.T) {
+	m := NewMap()
+	defer m.Close()
+	m.SetCaseSensitivity(P4MAP_CASE_SENSITIVE)
+	m.Insert("//Depot/...", "//Client/...", P4MAP_INCLUDE)
+
+	require.Equal(t, "//Client/File.txt", m.Translate("//Depot/File.txt", P4MAP_LEFT_RIGHT))
+	require.Empty(t, m.Translate("//depot/File.txt", P4MAP_LEFT_RIGHT))
+}
+
+func TestP4MapCaseInsensitiveMatchesWrongCase(t *testing.T) {
+	m := NewMap()
+	defer m.Close()
+	m.SetCaseSensitivity(P4MAP_CASE_INSENSITIVE)
+	m.Insert("//Depot/...", "//Client/...", P4MAP_INCLUDE)
+
+	require.Equal(t, "//Client/File.txt", m.Translate("//depot/File.txt", P4MAP_LEFT_RIGHT))
+}
+
+func TestP4MapReversePreservesCaseSensitivity(t *testing.T) {
+	m := NewMap()
+	defer m.Close()
+	m.SetCaseSensitivity(P4MAP_CASE_SENSITIVE)
+	m.Insert("//Depot/...", "//Client/...", P4MAP_INCLUDE)
+	m.Reverse()
+
+	require.Equal(t, "//Depot/File.txt", m.Translate("//Client/File.txt", P4MAP_LEFT_RIGHT))
+	require.Empty(t, m.Translate("//client/File.txt", P4MAP_LEFT_RIGHT))
+}
+
+func TestJoinMapPreservesCaseSensitivity(t *testing.T) {
+	a := NewMap()
+	defer a.Close()
+	a.SetCaseSensitivity(P4MAP_CASE_SENSITIVE)
+	a.Insert("//Depot/...", "//Client/...", P4MAP_INCLUDE)
+
+	b := NewMap()
+	defer b.Close()
+	b.SetCaseSensitivity(P4MAP_CASE_SENSITIVE)
+	b.Insert("//Client/...", "/Workspace/...", P4MAP_INCLUDE)
+
+	j := JoinMap(a, b)
+	require.NotNil(t, j)
+	defer j.Close()
+
+	require.Equal(t, "/Workspace/File.txt", j.Translate("//Depot/File.txt", P4MAP_LEFT_RIGHT))
+	require.Empty(t, j.Translate("//depot/File.txt", P4MAP_LEFT_RIGHT))
+}
+
+func TestP4MapCloseIsIdempotentAndClosedMapIsInert(t *testing.T) {
+	m := NewMap()
+	m.SetCaseSensitivity(P4MAP_CASE_SENSITIVE)
+	m.Insert("//depot/...", "//client/...", P4MAP_INCLUDE)
+
+	m.Close()
+	m.Close() // second Close must not crash
+
+	require.Zero(t, m.Count())
+	require.Empty(t, m.Translate("//depot/f.txt", P4MAP_LEFT_RIGHT))
+	require.Empty(t, m.Array())
+	require.Empty(t, m.Lhs(0))
+	require.Empty(t, m.Rhs(0))
+	m.Insert("//a/...", "//b/...", P4MAP_INCLUDE)
+	m.Clear()
+	m.Reverse()
+	m.SetCaseSensitivity(P4MAP_CASE_INSENSITIVE)
+	require.Nil(t, JoinMap(m, m))
+}
+
+const (
+	lifetimeChildEnv = "P4GO_LIFETIME_CHILD"
+	lifetimeChildOK  = "P4GO_CHILD_COMPLETED"
+)
+
+type closeProbeSSOHandler struct{}
+
+func (h *closeProbeSSOHandler) Authorize(vars Dictionary, maxLength int) (P4SSOResult, string) {
+	return P4SSO_PASS, "token"
+}
+
+// runLifetimeChild re-runs one test in a child process. The defects these
+// tests pin are native faults, so they take the whole process down rather
+// than failing an assertion; the parent inspects the child's exit instead.
+func runLifetimeChild(t *testing.T, testName string) {
+	t.Helper()
+
+	exe, err := os.Executable()
+	require.NoError(t, err, "cannot locate the test binary")
+
+	cmd := exec.Command(exe, "-test.run", "^"+testName+"$")
+	cmd.Env = append(os.Environ(), lifetimeChildEnv+"=1")
+	out, err := cmd.CombinedOutput()
+	text := strings.TrimSpace(string(out))
+
+	require.NoError(t, err, "%s crashed the child process: %s", testName, text)
+	require.Contains(t, text, lifetimeChildOK,
+		"%s child exited without reaching the end of the test", testName)
+}
+
+func TestSSOHandlerSurvivesClose(t *testing.T) {
+	if os.Getenv(lifetimeChildEnv) != "1" {
+		runLifetimeChild(t, "TestSSOHandlerSurvivesClose")
+		return
+	}
+
+	p4 := New()
+	p4.SetSSOHandler(&closeProbeSSOHandler{})
+	require.NotNil(t, p4.ssohandle, "the SSO handler was never attached, so Close() is not under test")
+
+	p4.Close()
+
+	require.Nil(t, p4.ssohandle, "Close() left a freed SSO handle behind")
+	fmt.Println(lifetimeChildOK)
+}
+
+func TestCloseIsIdempotent(t *testing.T) {
+	if os.Getenv(lifetimeChildEnv) != "1" {
+		runLifetimeChild(t, "TestCloseIsIdempotent")
+		return
+	}
+
+	p4 := New()
+	p4.SetSSOHandler(&closeProbeSSOHandler{})
+	p4.SetProgress(&SubmitP4Progress{})
+
+	p4.Close()
+	p4.Close()
+
+	fmt.Println(lifetimeChildOK)
+}
+
+func TestSetInputBytesRejectsInputTooLargeForP4API(t *testing.T) {
+	const rpcLimit = 0x1FFFFFFF
+	require.NoError(t, checkInputLength(0))
+	require.NoError(t, checkInputLength(rpcLimit-1))
+	require.Error(t, checkInputLength(rpcLimit))
+	require.Error(t, checkInputLength(0x60000000))
+}
+
+func (s *PerforceTestSuite) slowCommandTrigger(cmd string, seconds int) {
+	sleep := fmt.Sprintf("sleep %d", seconds)
+	if runtime.GOOS == "windows" {
+		sleep = fmt.Sprintf("powershell -NoProfile -Command Start-Sleep %d", seconds)
+	}
+	triggers, err := s.p4api.RunFetch("triggers")
+	require.NoError(s.T(), err, "Failed to fetch triggers")
+	triggers["Triggers"] = []string{fmt.Sprintf("slow command pre-user-%s \"%s\"", cmd, sleep)}
+	_, err = s.p4api.RunSave("triggers", triggers)
+	require.NoError(s.T(), err, "Failed to save triggers")
+}
+
+func (s *PerforceTestSuite) submitBinaryFile(name string, size int) {
+	data := make([]byte, size)
+	for i := range data {
+		data[i] = byte(i * 7)
+	}
+	require.NoError(s.T(), os.WriteFile(name, data, 0644), "Failed to create binary file")
+	_, err := s.p4api.Run("add", "-t", "binary", name)
+	require.NoError(s.T(), err, "Failed to add binary file")
+	_, err = s.p4api.RunSubmit("-d", "Add "+name)
+	require.NoError(s.T(), err, "Failed to submit binary file")
+}
+
+func (s *PerforceTestSuite) connectOverTCP() (*P4, func()) {
+	_, err := s.p4api.Disconnect()
+	require.NoError(s.T(), err, "Failed to disconnect the rsh connection")
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(s.T(), err, "Failed to find a free port")
+	port := listener.Addr().String()
+	listener.Close()
+
+	server := exec.Command(s.p4d, "-r", s.serverRoot, "-p", port, "-C1", "-J", "off", "-L", filepath.Join(s.serverRoot, "tcp.log"))
+	require.NoError(s.T(), server.Start(), "Failed to start TCP server")
+
+	p := New()
+	stop := func() {
+		p.Close()
+		_ = server.Process.Kill()
+		_ = server.Wait()
+	}
+	_, _ = p.SetCharset("none")
+	p.SetPort(port)
+	p.SetUser(s.p4api.User())
+	p.SetPassword(sbdPass)
+	connected := assert.Eventually(s.T(), func() bool {
+		_, err := p.Connect()
+		return err == nil
+	}, 10*time.Second, 100*time.Millisecond, "Failed to connect to TCP server")
+	if !connected {
+		stop()
+		s.T().FailNow()
+	}
+	_, err = p.RunLogin()
+	if err != nil {
+		stop()
+		require.NoError(s.T(), err, "Failed to log in to TCP server")
+	}
+	return p, stop
+}
+
+func (s *PerforceTestSuite) requireReconnectedAfterCancel(p *P4, what string) {
+	require.True(s.T(), p.Connected(), "Not reconnected after "+what)
+	_, err := p.ServerLevel()
+	require.NoError(s.T(), err, "ServerLevel failed after "+what)
+	require.True(s.T(), p.Connected(), "Connection lost again after "+what)
+	_, err = p.Run("depots")
+	require.NoError(s.T(), err, "Run failed after "+what)
+}
+
+type deadlineKeepAlive struct {
+	deadline time.Time
+	calls    int
+}
+
+func (k *deadlineKeepAlive) IsAlive() bool {
+	k.calls++
+	return time.Now().Before(k.deadline)
+}
+
+type cancelOnBinaryHandler struct {
+	NewOutputHandler
+}
+
+func (h *cancelOnBinaryHandler) HandleBinary(data []byte) P4OutputHandlerResult {
+	return P4OUTPUTHANDLER_CANCEL
+}
+
+type cancelContextOnBinaryHandler struct {
+	NewOutputHandler
+	cancel context.CancelFunc
+	chunks int
+}
+
+func (h *cancelContextOnBinaryHandler) HandleBinary(data []byte) P4OutputHandlerResult {
+	h.chunks++
+	if h.chunks == 1 {
+		h.cancel()
+		time.Sleep(200 * time.Millisecond)
+	}
+	return P4OUTPUTHANDLER_REPORT
+}
+
+func (s *PerforceTestSuite) TestRunContextRejectsNilContext() {
+	s.createClient()
+	var ctx context.Context
+
+	_, err := s.p4api.RunContext(ctx, "depots")
+
+	require.Error(s.T(), err, "RunContext accepted a nil context")
+	require.True(s.T(), s.p4api.Connected(), "A nil context broke the connection")
+}
+
+func (s *PerforceTestSuite) TestRunContextDoesNotRunWhenAlreadyCancelled() {
+	s.createClient()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := s.p4api.RunContext(ctx, "depots")
+
+	require.ErrorIs(s.T(), err, context.Canceled)
+	require.True(s.T(), s.p4api.Connected(), "An already cancelled RunContext broke the connection")
+}
+
+func (s *PerforceTestSuite) TestRunContextMatchesRunWhenNotCancelled() {
+	s.createClient()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	want, err := s.p4api.Run("depots")
+	require.NoError(s.T(), err, "Run failed")
+	got, err := s.p4api.RunContext(ctx, "depots")
+	require.NoError(s.T(), err, "RunContext failed")
+	require.Equal(s.T(), want, got, "RunContext results differ from Run")
+
+	_, wantErr := s.p4api.Run("nosuchcommand")
+	_, gotErr := s.p4api.RunContext(ctx, "nosuchcommand")
+	require.Error(s.T(), wantErr, "Run accepted an unknown command")
+	require.Error(s.T(), gotErr, "RunContext accepted an unknown command")
+	require.Equal(s.T(), wantErr.Error(), gotErr.Error(), "RunContext error differs from Run")
+}
+
+func (s *PerforceTestSuite) TestRunContextCompletesBeforeDeadline() {
+	s.createClient()
+	s.slowCommandTrigger("counters", 1)
+	p, stop := s.connectOverTCP()
+	defer stop()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	results, err := p.RunContext(ctx, "counters")
+
+	require.NoError(s.T(), err, "RunContext reported a command that completed as cancelled")
+	require.NotEmpty(s.T(), results, "Command returned no results")
+}
+
+func (s *PerforceTestSuite) TestRunContextCancelsRunningCommand() {
+	s.createClient()
+	s.slowCommandTrigger("counters", 3)
+	p, stop := s.connectOverTCP()
+	defer stop()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := p.RunContext(ctx, "counters")
+	require.ErrorIs(s.T(), err, context.DeadlineExceeded, "RunContext did not report the expired deadline")
+	require.Less(s.T(), time.Since(start), 3*time.Second, "RunContext did not interrupt the running command")
+
+	s.requireReconnectedAfterCancel(p, "RunContext was cancelled")
+}
+
+func (s *PerforceTestSuite) TestRunContextKeepsOutputReceivedBeforeCancellation() {
+	s.createClient()
+	const size = 16 << 20
+	s.submitBinaryFile("cancel_print.bin", size)
+	p, stop := s.connectOverTCP()
+	defer stop()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	p.SetHandler(&cancelContextOnBinaryHandler{cancel: cancel})
+	defer p.SetHandler(nil)
+
+	results, err := p.RunContext(ctx, "print", "-q", "//depot/cancel_print.bin")
+	require.ErrorIs(s.T(), err, context.Canceled, "RunContext did not report the cancellation")
+	received := 0
+	for _, result := range results {
+		if data, ok := result.(P4Data); ok {
+			received += len(data)
+		}
+	}
+	require.Greater(s.T(), received, 0, "Output received before cancellation was discarded")
+	require.Less(s.T(), received, size, "RunContext did not interrupt the command")
+
+	s.requireReconnectedAfterCancel(p, "RunContext was cancelled")
+}
+
+func (s *PerforceTestSuite) TestRunContextKeepsTheBreakSetBySetBreak() {
+	s.createClient()
+	s.slowCommandTrigger("counters", 3)
+	p, stop := s.connectOverTCP()
+	defer stop()
+
+	keepAlive := &deadlineKeepAlive{deadline: time.Now().Add(time.Hour)}
+	p.SetBreak(keepAlive)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	_, err := p.RunContext(ctx, "counters")
+	require.ErrorIs(s.T(), err, context.DeadlineExceeded, "RunContext did not report the expired deadline")
+
+	keepAlive.deadline = time.Now().Add(300 * time.Millisecond)
+	start := time.Now()
+	_, err = p.Run("counters")
+	require.ErrorContains(s.T(), err, "Command cancelled", "RunContext removed the break set by SetBreak")
+	require.Less(s.T(), time.Since(start), 3*time.Second, "The break set by SetBreak stopped interrupting commands")
+
+	p.SetBreak(nil)
+	s.requireReconnectedAfterCancel(p, "the break cancelled the command")
+}
+
+func (s *PerforceTestSuite) TestOutputHandlerCancelReconnects() {
+	s.createClient()
+	s.submitBinaryFile("handler_cancel.bin", 16<<20)
+	p, stop := s.connectOverTCP()
+	defer stop()
+
+	p.SetHandler(&cancelOnBinaryHandler{})
+	defer p.SetHandler(nil)
+	_, err := p.Run("print", "-q", "//depot/handler_cancel.bin")
+	require.ErrorContains(s.T(), err, "Command cancelled", "Run did not report the handler cancel")
+
+	s.requireReconnectedAfterCancel(p, "the handler cancelled")
+}
+
+func (s *PerforceTestSuite) TestSetBreakCancelsRunningCommand() {
+	s.createClient()
+	s.slowCommandTrigger("counters", 3)
+	p, stop := s.connectOverTCP()
+	defer stop()
+
+	p.SetBreak(&deadlineKeepAlive{deadline: time.Now().Add(300 * time.Millisecond)})
+	start := time.Now()
+	_, err := p.Run("counters")
+	require.ErrorContains(s.T(), err, "Command cancelled", "Run did not report the break")
+	require.Less(s.T(), time.Since(start), 3*time.Second, "SetBreak did not interrupt the running command")
+
+	p.SetBreak(nil)
+	s.requireReconnectedAfterCancel(p, "SetBreak cancelled the command")
+}
+
+func (s *PerforceTestSuite) TestSetBreakSetBeforeConnect() {
+	s.createClient()
+	s.slowCommandTrigger("counters", 3)
+	p, stop := s.connectOverTCP()
+	defer stop()
+	_, err := p.Disconnect()
+	require.NoError(s.T(), err, "Failed to disconnect")
+
+	p.SetBreak(&deadlineKeepAlive{deadline: time.Now().Add(300 * time.Millisecond)})
+	_, err = p.Connect()
+	require.NoError(s.T(), err, "Failed to connect")
+	start := time.Now()
+	_, err = p.Run("counters")
+	require.ErrorContains(s.T(), err, "Command cancelled", "A break set before Connect was ignored")
+	require.Less(s.T(), time.Since(start), 3*time.Second, "A break set before Connect did not interrupt the command")
+	p.SetBreak(nil)
+}
+
+func (s *PerforceTestSuite) TestSetBreakWorksWithOutputHandler() {
+	s.createClient()
+	s.slowCommandTrigger("counters", 3)
+	p, stop := s.connectOverTCP()
+	defer stop()
+
+	p.SetBreak(&deadlineKeepAlive{deadline: time.Now().Add(300 * time.Millisecond)})
+	p.SetHandler(&reportingStatHandler{})
+	defer p.SetHandler(nil)
+	start := time.Now()
+	_, err := p.Run("counters")
+	require.ErrorContains(s.T(), err, "Command cancelled", "Setting an output handler removed the break")
+	require.Less(s.T(), time.Since(start), 3*time.Second, "SetBreak did not interrupt the command with an output handler set")
+	p.SetBreak(nil)
+}
+
+func (s *PerforceTestSuite) TestSetBreakLetsCommandFinishWhileAlive() {
+	s.createClient()
+	s.slowCommandTrigger("counters", 1)
+	p, stop := s.connectOverTCP()
+	defer stop()
+
+	keepAlive := &deadlineKeepAlive{deadline: time.Now().Add(time.Hour)}
+	p.SetBreak(keepAlive)
+	defer p.SetBreak(nil)
+	results, err := p.Run("counters")
+	require.NoError(s.T(), err, "SetBreak cancelled a command it should have let finish")
+	require.NotEmpty(s.T(), results, "Command returned no results")
+	require.Greater(s.T(), keepAlive.calls, 0, "IsAlive was never polled")
+}
+
+func (s *PerforceTestSuite) TestSetBreakNilRemovesTheBreak() {
+	s.createClient()
+	s.slowCommandTrigger("counters", 1)
+	p, stop := s.connectOverTCP()
+	defer stop()
+
+	p.SetBreak(&deadlineKeepAlive{deadline: time.Now().Add(-time.Hour)})
+	p.SetBreak(nil)
+	results, err := p.Run("counters")
+
+	require.NoError(s.T(), err, "SetBreak(nil) did not remove the break")
+	require.NotEmpty(s.T(), results, "Command returned no results")
+}
+
+func (s *PerforceTestSuite) TestUntaggedFormIsReturnedInResults() {
+	s.createClient()
+	defer s.p4api.Close()
+
+	s.p4api.SetTagged(false)
+	defer s.p4api.SetTagged(true)
+
+	res, err := s.p4api.Run("client", "-o")
+
+	require.NoError(s.T(), err, "client -o returned an error")
+	require.NotEmpty(s.T(), res, "Untagged form output was not returned to the caller")
+
+	form, ok := res[0].(P4Data)
+	require.True(s.T(), ok, "Untagged form output was not a P4Data string")
+	require.Contains(s.T(), string(form), "Client:", "Form is missing the Client field")
+	require.Contains(s.T(), string(form), "View:", "Form is missing the View field")
+}
+
+func (s *PerforceTestSuite) TestUntaggedFormReachesOutputHandler() {
+	s.createClient()
+	defer s.p4api.Close()
+
+	h := &captureAllHandler{}
+	s.p4api.SetHandler(h)
+	defer s.p4api.SetHandler(nil)
+
+	s.p4api.SetTagged(false)
+	defer s.p4api.SetTagged(true)
+
+	res, err := s.p4api.Run("client", "-o")
+
+	require.NoError(s.T(), err, "client -o returned an error")
+	require.NotEmpty(s.T(), h.textOutput, "Untagged form output never reached the output handler")
+	require.Contains(s.T(), h.textOutput[0], "Client:", "Output handler did not receive the form")
+	require.Empty(s.T(), res, "P4OUTPUTHANDLER_HANDLED did not suppress the result")
 }

@@ -29,6 +29,7 @@ typedef struct Error Error;
 typedef struct StrDict StrDict;
 typedef struct P4GoSpecData P4GoSpecData;
 typedef struct P4GoMergeData P4GoMergeData;
+typedef struct FileSys FileSys;
 
 #include "p4gocallback.h"
 #include "_cgo_export.h"
@@ -61,6 +62,12 @@ void
 cbProgressDone( void* progress, int fail )
 {
     goCallProgressDoneFunction( progress, fail );
+}
+
+int
+cbIsAlive( void* keepAlive )
+{
+    return goCallKeepAliveIsAlive( keepAlive );
 }
 
 int
@@ -109,4 +116,41 @@ int
 cbResolve( void* handler, P4GoMergeData* m )
 {
     return goCallResolveFunction( handler, m );
+}
+
+
+void
+cbFbRelease( void* handler )
+{
+    goCallFbReleaseFunction( handler );
+}
+void
+cbFbOpen( void* handler, char *path, int mode, Error *e )
+{
+    goCallFbOpenFunction( handler, path, mode, e );
+}
+void
+cbFbWrite( void* handler, char *buf, int len, Error *e )
+{
+    goCallFbWriteFunction( handler, buf, len, e );
+}
+int
+cbFbRead( void* handler, char *buf, int len, Error *e )
+{
+    return goCallFbReadFunction( handler, buf, len, e );
+}
+void
+cbFbClose( void* handler, Error *e )
+{
+    goCallFbCloseFunction( handler, e );
+}
+void
+cbFbSeek( void* handler, long long offset, Error* e )
+{
+    goCallFbSeekFunction( handler, offset, e );
+}
+void
+cbFbSizeHint( void* handler, long long size )
+{
+    goCallFbSizeHintFunction( handler, size );
 }

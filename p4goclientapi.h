@@ -157,6 +157,11 @@ class P4GoClientApi
 
     void AppendInput( char* input ) { ui.AppendInput( input ); }
 
+    void AppendInputBytes( const char* input, unsigned int length )
+    {
+        ui.AppendInputBytes( input, length );
+    }
+
     // Result handling
     P4GoResults* GetResults() { return ui.GetResults(); }
 
@@ -187,9 +192,19 @@ class P4GoClientApi
 
     void SetDebug( int d );
 
+    // 'p4 password' support; see P4GoClientUser::Prompt(Error*, ...)
+    void SetDiscardUnusedOldPasswordSlot( int d )
+    {
+        ui.SetDiscardUnusedOldPasswordSlot( d != 0 );
+    }
+
     // Handler support
 
-    void SetHandler( P4GoHandler* handler ) { ui.SetHandler( handler ); }
+    void SetHandler( P4GoHandler* handler )
+    {
+        ui.SetHandler( handler );
+        UpdateBreak();
+    }
 
     P4GoHandler* GetHandler() { return ui.GetHandler(); }
 
@@ -197,6 +212,12 @@ class P4GoClientApi
     void SetProgress( P4GoProgress* progress ) { ui.SetProgress( progress ); }
 
     P4GoProgress* GetProgress() { return ui.GetProgress(); }
+
+    void SetKeepAlive( P4GoKeepAlive* k )
+    {
+        ui.SetKeepAlive( k );
+        UpdateBreak();
+    }
 
     void SetSSOHandler( P4GoSSOHandler* handler )
     {
@@ -211,6 +232,14 @@ class P4GoClientApi
     }
 
     P4GoResolveHandler* GetResolveHandler() { return ui.GetResolveHandler(); }
+
+    // FileSysBuffer support
+    void SetFileBuffer( P4GoFileSysBuffer* buffer )
+    {
+        ui.SetFileBuffer( buffer );
+    }
+
+    P4GoFileSysBuffer* GetFileBuffer() { return ui.GetFileBuffer(); }
 
 
   private:
@@ -249,6 +278,12 @@ class P4GoClientApi
     void ClearConnected() { flags &= ~S_CONNECTED; }
 
     int IsConnected() { return flags & S_CONNECTED; }
+
+    void UpdateBreak()
+    {
+        if( IsConnected() )
+            client.SetBreak( ui.GetHandler() || ui.GetKeepAlive() ? &ui : 0 );
+    }
 
     void SetCmdRun() { flags |= S_CMDRUN; }
 

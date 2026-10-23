@@ -63,6 +63,18 @@ class P4GoProgress
     cbDone_t cbDone;
 };
 
+typedef int ( *cbIsAlive_t )( void* );
+
+class P4GoKeepAlive
+{
+  public:
+    P4GoKeepAlive( cbIsAlive_t cbIsAlive );
+    int IsAlive();
+
+  private:
+    cbIsAlive_t cbIsAlive;
+};
+
 class P4GoHandler
 {
   public:
@@ -112,6 +124,43 @@ class P4GoResolveHandler
     cbResolve_t cbResolve;
 };
 
+typedef void ( *cbFbRelease_t )( void* );
+typedef void ( *cbFbOpen_t )( void*, char *path, int mode, Error *e );
+typedef void ( *cbFbWrite_t )( void*, char *buf, int len, Error *e );
+typedef int ( *cbFbRead_t )( void*, char *buf, int len, Error *e );
+typedef void ( *cbFbClose_t )( void*, Error *e );
+typedef void ( *cbFbSeek_t )( void*, long long offset, Error* e );
+typedef void ( *cbFbSizeHint_t )( void*, long long size );
+class P4GoFileSysBuffer : public FileSysBuffer {
+  public:
+    P4GoFileSysBuffer( cbFbRelease_t cbFbRelease,
+                       cbFbOpen_t cbFbOpen,
+                       cbFbWrite_t cbFbWrite,
+                       cbFbRead_t cbFbRead,
+                       cbFbClose_t cbFbClose,
+                       cbFbSeek_t cbFbSeek,
+                       cbFbSizeHint_t cbFbSizeHint );
+    virtual void	Release();
+
+    virtual void	Open( StrPtr *path, FileOpenMode mode, Error *e );
+    virtual void	Write( const char *buf, int len, Error *e );
+    virtual int	Read( char *buf, int len, Error *e );
+    virtual void	Close( Error *e );
+
+    virtual void	Seek( offL_t offset, Error* e );
+    virtual void	SizeHint( offL_t size );
+
+  private:
+    cbFbRelease_t cbFbRelease;
+    cbFbOpen_t cbFbOpen;
+    cbFbWrite_t cbFbWrite;
+    cbFbRead_t cbFbRead;
+    cbFbClose_t cbFbClose;
+    cbFbSeek_t cbFbSeek;
+    cbFbSizeHint_t cbFbSizeHint;
+
+};
+
 class P4GoClientUser
   : public ClientUser
   , public KeepAlive
@@ -121,6 +170,7 @@ class P4GoClientUser
     virtual ~P4GoClientUser();
 
     // Client User methods overridden here
+    void OutputInfo( char level, const char* data );
     void OutputText( const char* data, int length );
     void Message( Error* e );
     void OutputStat( StrDict* values );
@@ -133,6 +183,9 @@ class P4GoClientUser
                char* diffFlags,
                Error* e );
     void Prompt( const StrPtr& msg, StrBuf& rsp, int noEcho, Error* e );
+    void Prompt( Error* err, StrBuf& rsp, int noEcho, Error* e );
+
+    FileSys* File( FileSysType type );
 
     int Resolve( ClientMerge* m, Error* e );
     int Resolve( ClientResolveA* m, int preview, Error* e );
@@ -146,6 +199,7 @@ class P4GoClientUser
 
     void ResetInput();
     void AppendInput( char* input );
+    void AppendInputBytes( const char* input, unsigned int length );
 
     void SetCommand( const char* c ) { cmd = c; }
 
@@ -161,6 +215,15 @@ class P4GoClientUser
     // Debugging support
     void SetDebug( int d ) { debug = d; }
 
+    // 'p4 password' support: see Prompt(Error*, ...) in p4goclientuser.cpp.
+    // One-shot per command; not cleared by Reset() so it survives from
+    // being set (before Run()) through Reset() (inside Run()) to the
+    // prompt it targets.
+    void SetDiscardUnusedOldPasswordSlot( bool d )
+    {
+        discardUnusedOldPasswordSlot = d;
+    }
+
     // Handler support
     void SetHandler( P4GoHandler* handler );
 
@@ -171,6 +234,9 @@ class P4GoClientUser
 
     P4GoProgress* GetProgress() { return progress; }
 
+    void SetKeepAlive( P4GoKeepAlive* k ) { keepAlive = k; }
+    P4GoKeepAlive* GetKeepAlive() { return keepAlive; }
+
     // SSO handler support
     void SetSSOHandler( P4GoSSOHandler* handler );
     P4GoSSOHandler* GetSSOHandler();
@@ -179,8 +245,17 @@ class P4GoClientUser
     void SetResolveHandler( P4GoResolveHandler* handler );
     P4GoResolveHandler* GetResolveHandler();
 
+    // FileSysBuffer support
+    void SetFileBuffer( P4GoFileSysBuffer* buffer );
+    P4GoFileSysBuffer* GetFileBuffer() { return fileBuffer; }
+
     // override from KeepAlive
-    virtual int IsAlive() { return alive; }
+    virtual int IsAlive()
+    {
+        if( alive && keepAlive && !keepAlive->IsAlive() )
+            alive = 0;
+        return alive;
+    }
 
   private:
     void* MkMergeInfo( ClientMerge* m, StrPtr& hint );
@@ -202,8 +277,12 @@ class P4GoClientUser
     P4GoResolveHandler* resolveHandler;
     P4GoHandler* handler;
     P4GoProgress* progress;
+    P4GoKeepAlive* keepAlive;
+    P4GoFileSysBuffer* fileBuffer;
     int debug;
     int apiLevel;
     int alive;
     bool track;
+    bool oldPasswordPromptSeen;
+    bool discardUnusedOldPasswordSlot;
 };

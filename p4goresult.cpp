@@ -29,7 +29,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <p4/vararray.h>
 #include <p4/strarray.h>
 #include <p4/spec.h>
+#include <p4/strtable.h>
 #include "p4gospecmgr.h"
+#include "p4gospecdata.h"
 #include "p4goresult.h"
 
 P4GoResults::P4GoResults()
@@ -72,9 +74,25 @@ P4GoResults::Destroy( void* r ) const
 {
     // Delete the object if it belongs to us
     P4GoResult* res = (P4GoResult*)r;
-    if( !res->taken )
+    if( !res->taken ) {
+        switch( res->type ) {
+        case STRING:
+        case BINARY:
+        case TRACK:
+            delete res->str;
+            break;
+        case DICT:
+            delete res->dict;
+            break;
+        case ERROR:
+            delete res->err;
+            break;
+        case SPEC:
+            delete res->spec;
+            break;
+        }
         delete res;
-    else
+    } else
         res->taken = 2;
 }
 
@@ -90,6 +108,7 @@ P4GoResults::AddOutput( Error* e )
 
     P4GoResult* r = new P4GoResult;
     r->type = ERROR;
+    r->taken = 0;
     r->err = new Error;
     *r->err = *e;
     Put( r );

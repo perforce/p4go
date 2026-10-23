@@ -126,7 +126,8 @@ ResultGetBinary( P4GoResult* ret, int* len )
 {
     if( ret->type == BINARY ) {
         char* r = (char*)malloc( ret->str->Length() + 1 );
-        strcpy( r, ret->str->Text() );
+        memcpy( r, ret->str->Text(), ret->str->Length() );
+        r[ret->str->Length()] = '\0';
         *len = ret->str->Length();
         return r;
     }
@@ -252,6 +253,12 @@ void
 SetDebug( P4GoClientApi* api, int debug )
 {
     return api->SetDebug( debug );
+}
+
+void
+SetDiscardUnusedOldPasswordSlot( P4GoClientApi* api, int discard )
+{
+    return api->SetDiscardUnusedOldPasswordSlot( discard );
 }
 
 const char*
@@ -514,6 +521,14 @@ AppendInput( P4GoClientApi* api, char* input )
     api->AppendInput( input );
 }
 
+void
+AppendInputBytes( P4GoClientApi* api,
+                  const char* input,
+                  unsigned int length )
+{
+    api->AppendInputBytes( input, length );
+}
+
 P4GoSpecData*
 ParseSpec( P4GoClientApi* api, char* spec, char* form, Error* e )
 {
@@ -556,6 +571,24 @@ Error* MakeError()
 void FreeError( Error* e )
 {
     delete e;
+}
+
+void SetError( Error* e, const char* msg )
+{
+    // Set( ErrorSeverity, const char* ) only stores the fmt pointer for
+    // deferred formatting; it never copies the text. msg is a transient
+    // CGO buffer the Go caller frees as soon as this call returns, so
+    // passing it to that overload directly would leave e holding a
+    // dangling pointer. Route it through the ErrorId+StrDict
+    // substitution path instead, which copies msg into e's own storage.
+    ErrorId id;
+    id.code = ErrorOf( 0, 0, E_FAILED, 0, 0 );
+    id.fmt  = "%msg%";
+
+    StrBufDict dict;
+    dict.SetVar( "msg", msg );
+
+    e->Set( id, &dict );
 }
 
 const char*
@@ -625,6 +658,24 @@ P4GoProgress*
 GetProgress( P4GoClientApi* api )
 {
     return api->GetProgress();
+}
+
+P4GoKeepAlive*
+NewKeepAlive()
+{
+    return new P4GoKeepAlive( cbIsAlive );
+}
+
+void
+FreeKeepAlive( P4GoKeepAlive* keepAlive )
+{
+    delete keepAlive;
+}
+
+void
+SetKeepAlive( P4GoClientApi* api, P4GoKeepAlive* keepAlive )
+{
+    api->SetKeepAlive( keepAlive );
 }
 
 P4GoHandler*
@@ -752,6 +803,36 @@ FreeResolveHandler( P4GoResolveHandler* handler )
     delete handler;
 }
 
+P4GoFileSysBuffer*
+NewFileBuffer()
+{
+    return new P4GoFileSysBuffer( cbFbRelease,
+                                  cbFbOpen,
+                                  cbFbWrite,
+                                  cbFbRead,
+                                  cbFbClose,
+                                  cbFbSeek,
+                                  cbFbSizeHint );
+}
+
+void
+FreeFileBuffer( P4GoFileSysBuffer* buffer )
+{
+    delete buffer;
+}
+
+void
+SetFileBuffer( P4GoClientApi* api, P4GoFileSysBuffer* buffer )
+{
+    api->SetFileBuffer( buffer );
+}
+
+P4GoFileSysBuffer*
+GetFileBuffer( P4GoClientApi* api )
+{
+    return api->GetFileBuffer();
+}
+
 // MapApi
 
 MapApi*
@@ -770,6 +851,12 @@ MapApi*
 JoinMapApi( MapApi* m1, MapApi* m2 )
 {
     return MapApi::Join( m1, m2 );
+}
+
+void
+MapApiSetCaseSensitivity( MapApi* mapapi, int mode )
+{
+    mapapi->SetCaseSensitivity( (MapCase)mode );
 }
 
 void

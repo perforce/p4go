@@ -205,7 +205,7 @@ P4GoClientApi::GetTrustFile()
     HostEnv henv;
     henv.GetTrustFile( trustFile );
 
-    if( ( t = enviro->Get( "P4TICKETS" ) ) )
+    if( ( t = enviro->Get( "P4TRUST" ) ) )
         trustFile = t;
 
     return trustFile;
@@ -301,15 +301,8 @@ P4GoClientApi::ConnectOrReconnect( Error* e )
     if( e->Test() )
         return 0;
 
-    // If a handler is defined, reset the break functionality
-    // for the KeepAlive function
-
-    if( ui.GetHandler() != NULL )
-    {
-        client.SetBreak( &ui );
-    }
-    
     SetConnected();
+    UpdateBreak();
     return 1;
 }
 
@@ -486,11 +479,18 @@ P4GoClientApi::Run( const char* cmd, int argc, char* const* argv, Error* e )
     RunCmd( cmd, &ui, argc, argv );
     depth--;
 
-    if( ui.GetHandler() != NULL ) {
-        if( client.Dropped() && !ui.IsAlive() ) {
-            Disconnect( e );
-            ConnectOrReconnect( e );
-        }
+    if( client.Dropped() && !ui.IsAlive() ) {
+        if( exceptionLevel )
+            e->Set( E_FAILED, "P4#run - Command cancelled." );
+
+        Error closeErr;
+        client.Final( &closeErr );
+
+        Error reconnectErr;
+        ConnectOrReconnect( &reconnectErr );
+
+        if( reconnectErr.Test() )
+            e->Merge( reconnectErr );
     }
 
     P4GoResults* results = ui.GetResults();

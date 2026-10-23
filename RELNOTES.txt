@@ -111,6 +111,49 @@ Compatibility Statements
 
 --------------------------------------------------------------------------
 
+New functionalities in 2026.1 Patch 2 (2026.1/3112262) (2026/10/21)
+
+    #3095482 (Job #138483)
+        Added a RunContext API that accepts a context.Context, allowing a
+        command to be cancelled or timed out after it has started.
+
+    #3085240 (Job #138484)
+        Added SetInputBytes, allowing commands to send raw binary input to
+        the server, including data that is not valid UTF-8 or that contains
+        NUL bytes.
+
+    #3061172 (Job #124616)
+        Added support for streaming p4 print output, so large binary files
+        can be downloaded without loading the entire file into memory.
+
+Bugs fixed in 2026.1 Patch 2 (2026.1/3112262) (2026/10/21)
+
+    #3096352 (Job #140534)
+        Fixed an issue where output from -o commands was printed to stdout
+        instead of being returned by Run().
+
+    #3076904 (Job #137726)
+        Fixed P4Map matching paths that a case-sensitive server would
+        reject; new case-respecting APIs allow a map to be built with
+        case-sensitive matching and to take server-returned entries
+        directly.
+
+    #3067115 (Job #137727)
+        Fixed crashes during command result handling, a leaked buffer in
+        P4Identify, P4TRUST being read from the wrong environment
+        variable, successful commands being reported as errors, and slow
+        spec parsing.
+
+    #3067115 (Job #139406)
+        Fixed native memory growth in long-running applications, where
+        the memory holding command results was never released.
+
+    (Job #138120)
+        Fixed a crash when running commands concurrently on separate
+        connections.
+
+--------------------------------------------------------------------------
+
 Bugs fixed in 2026.1 Patch 1 (2026.1/2982500) (2026/06/17)
 
     #2981339 (Job #134671)

@@ -29,11 +29,13 @@ typedef struct P4GoClientApi P4GoClientApi;
 typedef struct Error Error;
 typedef struct P4GoResult P4GoResult;
 typedef struct P4GoProgress P4GoProgress;
+typedef struct P4GoKeepAlive P4GoKeepAlive;
 typedef struct StrDict StrDict;
 typedef struct StrBufDict StrBufDict;
 typedef struct P4GoHandler P4GoHandler;
 typedef struct P4GoSSOHandler P4GoSSOHandler;
 typedef struct P4GoResolveHandler P4GoResolveHandler;
+typedef struct P4GoFileSysBuffer P4GoFileSysBuffer;
 typedef struct P4GoSpecData P4GoSpecData;
 typedef struct MapApi MapApi;
 typedef struct P4GoMergeData P4GoMergeData;
@@ -82,6 +84,7 @@ extern "C"
     void SetGraph( P4GoClientApi* api, int enableGraph );
     int GetDebug( P4GoClientApi* api );
     void SetDebug( P4GoClientApi* api, int debug );
+    void SetDiscardUnusedOldPasswordSlot( P4GoClientApi* api, int discard );
     const char* GetCharset( P4GoClientApi* api );
     int SetCharset( P4GoClientApi* api, char* charset, Error* e );
     const char* GetCwd( P4GoClientApi* api );
@@ -126,6 +129,9 @@ extern "C"
 
     void ResetInput( P4GoClientApi* api );
     void AppendInput( P4GoClientApi* api, char* input );
+    void AppendInputBytes( P4GoClientApi* api,
+                           const char* input,
+                           unsigned int length );
 
     P4GoSpecData* ParseSpec( P4GoClientApi* api, char* spec, char* form, Error* e );
     char* FormatSpec( P4GoClientApi* api, char* spec, StrDict* dict, Error* e );
@@ -139,6 +145,7 @@ extern "C"
     //
     Error* MakeError();
     void FreeError( Error* e );
+    void SetError( Error* e, const char* msg );
     const char* FmtError( Error* e, int i );
     int GetErrorCode( Error* e, int i );
     int GetErrorCount( Error* e );
@@ -152,6 +159,10 @@ extern "C"
     void FreeProgress( P4GoProgress* progress );
     void SetProgress( P4GoClientApi* api, P4GoProgress* progress );
     P4GoProgress* GetProgress( P4GoClientApi* api );
+
+    P4GoKeepAlive* NewKeepAlive();
+    void FreeKeepAlive( P4GoKeepAlive* keepAlive );
+    void SetKeepAlive( P4GoClientApi* api, P4GoKeepAlive* keepAlive );
 
     P4GoHandler* NewHandler();
     void FreeHandler( P4GoHandler* handler );
@@ -179,6 +190,11 @@ extern "C"
     P4GoResolveHandler* GetResolveHandler( P4GoClientApi* api );
     P4GoResolveHandler* NewResolveHandler();
     void FreeResolveHandler( P4GoResolveHandler* handler );
+
+    P4GoFileSysBuffer* NewFileBuffer();
+    void FreeFileBuffer( P4GoFileSysBuffer* buffer );
+    void SetFileBuffer( P4GoClientApi* api, P4GoFileSysBuffer* buffer );
+    P4GoFileSysBuffer* GetFileBuffer( P4GoClientApi* api );
 
 
     char* MergeDataGetYourName( P4GoMergeData* m );
@@ -210,6 +226,7 @@ extern "C"
     MapApi* NewMapApi();
     void FreeMapApi( MapApi* mapapi );
     MapApi* JoinMapApi( MapApi* m1, MapApi* m2 );
+    void MapApiSetCaseSensitivity( MapApi* mapapi, int mode );
     void MapApiInsert( MapApi* mapapi, char* lhs, char* rhs, int flag );
     void MapApiClear( MapApi* mapapi );
     int MapApiCount( MapApi* mapapi );

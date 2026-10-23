@@ -6,7 +6,7 @@ accompanying license file for the license terms that apply to that software only
 github.com/Davecgh/Go-spew-v1.1.1
   Licenses:
     License:     ISC
-    Reference:   https://index.mend.io/gri/app/reader/resource/content/asString/5f11fb85-e9d2-41c1-a597-10bf89a841d2
+    Reference:   https://index.mend.io/gri/app/reader/resource/content/asString/5a0a94e3-903e-45e1-ab9e-94bd26aef032
     LicenseText: License Text Under Appendix
 
   Copyrights:
@@ -39,11 +39,11 @@ github.com/pmezard/Go-difflib-v1.0.0
 gopkg.in/yAML.v3-v3.0.1
   Licenses:
     License:     Apache 2.0
-    Reference:   https://index.mend.io/gri/app/reader/resource/content/asString/70a7c7cc-095e-46c8-b040-d18cfecfa254
+    Reference:   https://index.mend.io/gri/app/reader/resource/content/asString/56e618e7-58db-457a-8329-acf26e41a8a0
     LicenseText: License Text Under Appendix
 
     License:     MIT
-    Reference:   https://index.mend.io/gri/app/reader/resource/content/asString/70a7c7cc-095e-46c8-b040-d18cfecfa254
+    Reference:   https://index.mend.io/gri/app/reader/resource/content/asString/56e618e7-58db-457a-8329-acf26e41a8a0
     LicenseText: License Text Under Appendix
 
   Copyrights:
